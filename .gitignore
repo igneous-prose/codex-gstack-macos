@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.codex-gstack/
+.agents/skills/
+playwright-report/
+coverage/
+*.tsbuildinfo
+.DS_Store
+codex-gstack-macos-implementation-plan.md

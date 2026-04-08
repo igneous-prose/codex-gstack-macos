@@ -1,0 +1,205 @@
+import { openSync } from "node:fs";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+import { listCookieDomains } from "./chromium-cookies.js";
+import { type SupportedCookieBrowser } from "./config.js";
+import { DEFAULT_DAEMON_PORT, getDaemonInfo, makeToken } from "./daemon.js";
+import { ensureRuntimePaths, resolveTargetRepo } from "./config.js";
+import { clearDaemonState, isProcessAlive } from "./state.js";
+
+function getRepoRoot(): string {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+}
+
+function readOption(args: string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  return index === -1 ? undefined : args[index + 1];
+}
+
+function readMultiOption(args: string[], name: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const current = args[index];
+    const next = args[index + 1];
+    if (current === name && next) {
+      values.push(next);
+    }
+  }
+  return values;
+}
+
+async function waitForHealth(host: string, port: number): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://${host}:${port}/health`);
+      if (response.ok) {
+        return;
+      }
+    } catch {
+      // Keep polling until the daemon is ready.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error("Timed out waiting for daemon health check.");
+}
+
+async function callDaemon(
+  targetRepo: string,
+  routePath: string,
+  init: RequestInit = {}
+): Promise<unknown> {
+  const { daemonState } = getDaemonInfo(targetRepo);
+  if (!daemonState || !isProcessAlive(daemonState.pid)) {
+    throw new Error("Browser daemon is not running. Start it with `npm run browser:start`.");
+  }
+
+  const response = await fetch(`http://${daemonState.host}:${daemonState.port}${routePath}`, {
+    ...init,
+    headers: {
+      authorization: `Bearer ${daemonState.token}`,
+      "content-type": "application/json",
+      ...(init.headers ?? {})
+    }
+  });
+  const body = (await response.json()) as { error?: string };
+  if (!response.ok) {
+    throw new Error(body.error ?? `Daemon call failed with ${response.status}`);
+  }
+  return body;
+}
+
+async function handleDaemonCommand(args: string[]): Promise<void> {
+  const subcommand = args[1];
+  const targetRepo = resolveTargetRepo(readOption(args, "--repo"));
+
+  if (subcommand === "start") {
+    const { runtimePaths, daemonState } = getDaemonInfo(targetRepo);
+    if (daemonState && isProcessAlive(daemonState.pid)) {
+      console.log(JSON.stringify({ status: "running", ...daemonState }, null, 2));
+      return;
+    }
+
+    clearDaemonState(runtimePaths);
+
+    const port = Number.parseInt(readOption(args, "--port") ?? `${DEFAULT_DAEMON_PORT}`, 10);
+    const token = readOption(args, "--token") ?? makeToken();
+    const repoRoot = getRepoRoot();
+    const tsxCliPath = path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
+    const logFd = openSync(runtimePaths.daemonLogFile, "a");
+    const child = spawn(
+      process.execPath,
+      [tsxCliPath, path.join(repoRoot, "src/browser/daemon-entry.ts"), "--repo", targetRepo, "--port", `${port}`, "--token", token],
+      {
+        cwd: repoRoot,
+        detached: true,
+        stdio: ["ignore", logFd, logFd]
+      }
+    );
+    child.unref();
+    await waitForHealth("127.0.0.1", port);
+    const currentState = getDaemonInfo(targetRepo).daemonState;
+    console.log(JSON.stringify({ status: "running", ...currentState }, null, 2));
+    return;
+  }
+
+  if (subcommand === "stop") {
+    const { runtimePaths, daemonState } = getDaemonInfo(targetRepo);
+    if (!daemonState || !isProcessAlive(daemonState.pid)) {
+      clearDaemonState(runtimePaths);
+      console.log(JSON.stringify({ status: "stopped" }, null, 2));
+      return;
+    }
+    process.kill(daemonState.pid, "SIGTERM");
+    clearDaemonState(runtimePaths);
+    console.log(JSON.stringify({ status: "stopped" }, null, 2));
+    return;
+  }
+
+  if (subcommand === "status") {
+    const { daemonState } = getDaemonInfo(targetRepo);
+    const isRunning = daemonState ? isProcessAlive(daemonState.pid) : false;
+    console.log(JSON.stringify({ status: isRunning ? "running" : "stopped", daemonState }, null, 2));
+    return;
+  }
+
+  throw new Error(`Unknown daemon subcommand: ${subcommand}`);
+}
+
+async function handlePageCommand(args: string[]): Promise<void> {
+  const subcommand = args[1];
+  const targetRepo = resolveTargetRepo(readOption(args, "--repo"));
+  const url = readOption(args, "--url");
+  const outputPath = readOption(args, "--output");
+
+  if (!url || !outputPath) {
+    throw new Error("--url and --output are required.");
+  }
+
+  const routePath = subcommand === "screenshot" ? "/page/screenshot" : "/page/snapshot";
+  const result = await callDaemon(targetRepo, routePath, {
+    method: "POST",
+    body: JSON.stringify({ url, outputPath })
+  });
+  console.log(JSON.stringify(result, null, 2));
+}
+
+async function handleCookieCommand(args: string[]): Promise<void> {
+  const subcommand = args[1];
+  const browser = readOption(args, "--browser") as SupportedCookieBrowser | undefined;
+
+  if (!browser) {
+    throw new Error("--browser is required.");
+  }
+
+  if (subcommand === "list-domains") {
+    console.log(JSON.stringify({ domains: listCookieDomains(browser) }, null, 2));
+    return;
+  }
+
+  if (subcommand === "import") {
+    const targetRepo = resolveTargetRepo(readOption(args, "--repo"));
+    const domains = readMultiOption(args, "--domain");
+    if (domains.length === 0) {
+      throw new Error("At least one --domain value is required.");
+    }
+    console.error("Cookie import uses real browser session material.");
+    const result = await callDaemon(targetRepo, "/cookies/import", {
+      method: "POST",
+      body: JSON.stringify({ browser, domains })
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  throw new Error(`Unknown cookie subcommand: ${subcommand}`);
+}
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  const topLevelCommand = args[0];
+
+  if (!topLevelCommand) {
+    throw new Error("A command is required.");
+  }
+
+  ensureRuntimePaths(resolveTargetRepo(readOption(args, "--repo")));
+
+  switch (topLevelCommand) {
+    case "daemon":
+      await handleDaemonCommand(args);
+      break;
+    case "page":
+      await handlePageCommand(args);
+      break;
+    case "cookies":
+      await handleCookieCommand(args);
+      break;
+    default:
+      throw new Error(`Unknown command: ${topLevelCommand}`);
+  }
+}
+
+await main();
