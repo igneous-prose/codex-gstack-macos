@@ -30,34 +30,44 @@ gh api --method PATCH "repos/$repo" \
   -F allow_rebase_merge=false \
   -F delete_branch_on_merge=true
 
-gh api --method PATCH "repos/$repo/vulnerability-alerts" >/dev/null 2>&1 || true
+gh api --method PUT "repos/$repo/vulnerability-alerts" >/dev/null 2>&1 || true
 gh api --method PUT "repos/$repo/automated-security-fixes" >/dev/null 2>&1 || true
-gh api --method PATCH "repos/$repo" -F security_and_analysis='{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"},"dependabot_security_updates":{"status":"enabled"},"dependabot_alerts":{"status":"enabled"}}' >/dev/null 2>&1 || true
+gh api --method PATCH "repos/$repo" --input - >/dev/null 2>&1 <<'JSON' || true
+{
+  "security_and_analysis": {
+    "secret_scanning": { "status": "enabled" },
+    "secret_scanning_push_protection": { "status": "enabled" },
+    "dependabot_security_updates": { "status": "enabled" }
+  }
+}
+JSON
 
-main_sha="$(gh api "repos/$repo/commits/main" --jq '.sha')"
-combined_state="$(gh api "repos/$repo/commits/$main_sha/status" --jq '.state')"
+latest_ci_conclusion="$(gh run list --repo "$repo" --workflow CI --branch main --limit 1 --json conclusion --jq '.[0].conclusion // ""')"
 
-if [[ "$combined_state" != "success" ]]; then
+if [[ "$latest_ci_conclusion" != "success" ]]; then
   echo "Main branch checks are not green yet; skipping branch protection." >&2
   exit 0
 fi
 
 gh api --method PUT "repos/$repo/branches/main/protection" \
   -H "Accept: application/vnd.github+json" \
-  -f required_status_checks.strict=true \
-  -f enforce_admins=false \
-  -f required_pull_request_reviews=null \
-  -f restrictions=null \
-  -f required_linear_history=false \
-  -f allow_force_pushes=false \
-  -f allow_deletions=false \
-  -f block_creations=false \
-  -f required_conversation_resolution=false \
-  -f lock_branch=false \
-  -f allow_fork_syncing=false \
-  -f required_status_checks.contexts[]='lint' \
-  -f required_status_checks.contexts[]='test' \
-  -f required_status_checks.contexts[]='security'
+  --input - <<'JSON'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": ["lint", "test", "security"]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": null,
+  "restrictions": null,
+  "required_linear_history": false,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "block_creations": false,
+  "required_conversation_resolution": false,
+  "lock_branch": false,
+  "allow_fork_syncing": false
+}
+JSON
 
 echo "Configured GitHub settings for $repo"
-
