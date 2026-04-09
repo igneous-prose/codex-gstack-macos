@@ -60,6 +60,7 @@ import {
   buildDaemonStatusPayload,
   buildDaemonTokenPayload,
   openDaemonLogFile,
+  parseDaemonProcessMetadata,
   readDaemonPortOption,
   shouldRestartRunningDaemon
 } from "../src/browser/cli.js";
@@ -222,7 +223,7 @@ describe("runtime hardening", () => {
   });
 
   it("redacts daemon state for normal output", () => {
-    const connection = getDaemonConnection("/tmp/repo");
+    const connection = getDaemonConnection("/tmp/repo", 47770, "c".repeat(48));
 
     expect(
       redactDaemonState({
@@ -247,10 +248,10 @@ describe("runtime hardening", () => {
       targetRepo: "/tmp/repo",
       startedAt: "2026-04-09T10:00:00.000Z"
     };
-    const connection = getDaemonConnection(daemonState.targetRepo);
+    const connection = getDaemonConnection(daemonState.targetRepo, 47770, "a".repeat(48));
 
     const statusPayload = buildDaemonStatusPayload(daemonState, true);
-    const tokenPayload = buildDaemonTokenPayload(daemonState);
+    const tokenPayload = buildDaemonTokenPayload(daemonState, connection);
 
     expect(JSON.stringify(statusPayload)).toContain('"token":"[redacted]"');
     expect(JSON.stringify(statusPayload)).not.toContain(connection.token);
@@ -259,7 +260,7 @@ describe("runtime hardening", () => {
   });
 
   it("derives connection details from an explicit port override", () => {
-    const connection = getDaemonConnection("/tmp/repo", 50123);
+    const connection = getDaemonConnection("/tmp/repo", 50123, "b".repeat(48));
     const statusPayload = buildDaemonStatusPayload(
       {
         pid: 123,
@@ -267,16 +268,32 @@ describe("runtime hardening", () => {
         startedAt: "2026-04-09T10:00:00.000Z"
       },
       true,
-      50123
+      connection
     );
 
     expect(connection.port).toBe(50123);
-    expect(connection.token).not.toBe(getDaemonConnection("/tmp/repo").token);
+    expect(connection.token).not.toBe(getDaemonConnection("/tmp/repo", 47770, "b".repeat(48)).token);
     expect(statusPayload).toMatchObject({
       daemonState: {
         port: 50123
       }
     });
+  });
+
+  it("parses daemon process metadata from marker arguments", () => {
+    expect(
+      parseDaemonProcessMetadata(
+        "node cli.mjs src/browser/daemon-entry.ts --repo /tmp/repo --repo-hash " +
+          "a".repeat(64) +
+          " --port 50123 --nonce " +
+          "b".repeat(48)
+      )
+    ).toEqual({
+      repoHash: "a".repeat(64),
+      port: 50123,
+      nonce: "b".repeat(48)
+    });
+    expect(parseDaemonProcessMetadata("node daemon-entry.ts --repo /tmp/repo")).toBeNull();
   });
 
   it("requires a restart before revealing a legacy daemon token", () => {
@@ -289,7 +306,7 @@ describe("runtime hardening", () => {
       startedAt: "2026-04-09T10:00:00.000Z"
     };
 
-    expect(() => buildDaemonTokenPayload(legacyState)).toThrow(
+    expect(() => buildDaemonTokenPayload(legacyState, getDaemonConnection("/tmp/repo", 47770, "d".repeat(48)))).toThrow(
       buildLegacyDaemonUpgradeMessage("/tmp/repo")
     );
   });
@@ -314,16 +331,16 @@ describe("runtime hardening", () => {
   });
 
   it("derives a stable per-repo daemon connection without persisting it", () => {
-    const first = getDaemonConnection("/tmp/repo");
-    const second = getDaemonConnection("/tmp/repo");
-    const different = getDaemonConnection("/tmp/other-repo");
+    const first = getDaemonConnection("/tmp/repo", 47770, "e".repeat(48));
+    const second = getDaemonConnection("/tmp/repo", 47770, "e".repeat(48));
+    const different = getDaemonConnection("/tmp/other-repo", 47770, "e".repeat(48));
 
     expect(first).toEqual(second);
     expect(first.host).toBe("127.0.0.1");
     expect(first.port).toBeGreaterThanOrEqual(DEFAULT_PORT);
     expect(first.port).toBeLessThan(DEFAULT_PORT + DAEMON_PORT_RANGE);
     expect(first.token).toMatch(/^[a-f0-9]{64}$/);
-    expect(different.port).not.toBe(first.port);
+    expect(different.port).toBe(first.port);
     expect(different.token).not.toBe(first.token);
   });
 
@@ -347,6 +364,20 @@ describe("runtime hardening", () => {
     expect(() => assertNoUnsupportedDaemonFlags(["daemon", "start", "--token", "secret"])).toThrow(
       /no longer supported/
     );
+  });
+
+  it("does not request automatic legacy daemon termination", () => {
+    const legacyState = {
+      pid: 123,
+      host: "127.0.0.1",
+      port: 47770,
+      token: "legacy-token",
+      targetRepo: "/tmp/repo",
+      startedAt: "2026-04-09T10:00:00.000Z"
+    };
+
+    expect(shouldRestartRunningDaemon(legacyState, true)).toBe(true);
+    expect(buildLegacyDaemonUpgradeMessage("/tmp/repo")).toContain("browser:stop");
   });
 
   it("allows only http and https page URLs", async () => {

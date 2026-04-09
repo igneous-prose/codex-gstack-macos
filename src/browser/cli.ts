@@ -1,14 +1,19 @@
 import { chmodSync, openSync } from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { listCookieDomains } from "./chromium-cookies.js";
 import {
   ensureRuntimePaths,
+  getDefaultDaemonPort,
   getDaemonConnection,
+  hashTargetRepo,
+  makeDaemonNonce,
   PRIVATE_FILE_MODE,
   resolveTargetRepo,
+  type DaemonConnection,
+  type DaemonProcessMetadata,
   type SupportedCookieBrowser
 } from "./config.js";
 import { getDaemonInfo } from "./daemon.js";
@@ -59,6 +64,61 @@ export function readDaemonPortOption(args: string[]): number | undefined {
   return parsedPort;
 }
 
+export function parseDaemonProcessMetadata(commandLine: string): DaemonProcessMetadata | null {
+  const repoHashMatch = commandLine.match(/(?:^|\s)--repo-hash\s+([a-f0-9]{64})(?=\s|$)/);
+  const portMatch = commandLine.match(/(?:^|\s)--port\s+([0-9]{1,5})(?=\s|$)/);
+  const nonceMatch = commandLine.match(/(?:^|\s)--nonce\s+([a-f0-9]{48})(?=\s|$)/);
+
+  if (!repoHashMatch || !portMatch || !nonceMatch) {
+    return null;
+  }
+
+  const repoHash = repoHashMatch[1];
+  const portText = portMatch[1];
+  const nonce = nonceMatch[1];
+  if (!repoHash || !portText || !nonce) {
+    return null;
+  }
+
+  const port = Number.parseInt(portText, 10);
+  if (port < 1 || port > 65_535) {
+    return null;
+  }
+
+  return {
+    repoHash,
+    port,
+    nonce
+  };
+}
+
+function readProcessCommandLine(pid: number): string | null {
+  try {
+    return execFileSync("/bin/ps", ["-ww", "-p", `${pid}`, "-o", "command="], {
+      encoding: "utf8"
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+export function resolveRunningDaemonConnection(
+  targetRepo: string,
+  pid: number
+): DaemonConnection | null {
+  const commandLine = readProcessCommandLine(pid);
+  if (!commandLine) {
+    return null;
+  }
+
+  const metadata = parseDaemonProcessMetadata(commandLine);
+  if (!metadata || metadata.repoHash !== hashTargetRepo(targetRepo)) {
+    return null;
+  }
+
+  return getDaemonConnection(targetRepo, metadata.port, metadata.nonce);
+}
+
 export function buildPageCommandRequest(args: string[]): {
   routePath: "/page/screenshot" | "/page/snapshot";
   body: {
@@ -96,13 +156,23 @@ export function openDaemonLogFile(logFilePath: string): number {
 export function buildDaemonStatusPayload(
   daemonState: PersistedDaemonState | null,
   isRunning: boolean,
-  portOverride?: number
+  connectionOverride?: DaemonConnection | null
 ): Record<string, unknown> {
   const legacyRunningDaemon =
     daemonState && isRunning && isLegacyDaemonState(daemonState) ? daemonState : null;
   return {
     status: legacyRunningDaemon ? "restart-required" : isRunning ? "running" : "stopped",
-    daemonState: daemonState ? redactDaemonState(daemonState, portOverride) : null,
+    daemonState: daemonState
+      ? redactDaemonState(
+          daemonState,
+          connectionOverride
+            ? {
+                host: connectionOverride.host,
+                port: connectionOverride.port
+              }
+            : undefined
+        )
+      : null,
     ...(daemonState
       ? {
           tokenHint: "Run `npm run browser:token -- --repo <target-repo>` to reveal the bearer token."
@@ -138,23 +208,12 @@ export function shouldRestartRunningDaemon(
 
 export function buildDaemonTokenPayload(
   daemonState: PersistedDaemonState,
-  portOverride?: number
+  connection: DaemonConnection
 ): Record<string, unknown> {
   if (isLegacyDaemonState(daemonState)) {
     throw new Error(buildLegacyDaemonUpgradeMessage(daemonState.targetRepo));
   }
-  return { token: getDaemonConnection(daemonState.targetRepo, portOverride).token };
-}
-
-async function waitForProcessExit(pid: number): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    if (!isProcessAlive(pid)) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error("Timed out waiting for the existing daemon to stop.");
+  return { token: connection.token };
 }
 
 async function waitForHealth(host: string, port: number): Promise<void> {
@@ -186,7 +245,17 @@ async function callDaemon(
   if (isLegacyDaemonState(daemonState)) {
     throw new Error(buildLegacyDaemonUpgradeMessage(targetRepo));
   }
-  const connection = getDaemonConnection(targetRepo, portOverride);
+  const connection = resolveRunningDaemonConnection(targetRepo, daemonState.pid);
+  if (!connection) {
+    throw new Error(
+      "Unable to verify the running browser daemon process. Run `npm run browser:stop` and then `npm run browser:start`."
+    );
+  }
+  if (portOverride !== undefined && portOverride !== connection.port) {
+    throw new Error(
+      `Browser daemon is running on port ${connection.port}. Re-run the command with --port ${connection.port} or restart the daemon on port ${portOverride}.`
+    );
+  }
 
   const response = await fetch(`http://${connection.host}:${connection.port}${routePath}`, {
     ...init,
@@ -209,22 +278,35 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
 
   if (subcommand === "start") {
     assertNoUnsupportedDaemonFlags(args);
-    const portOverride = readDaemonPortOption(args);
+    const requestedPort = readDaemonPortOption(args) ?? getDefaultDaemonPort(targetRepo);
     const { runtimePaths, daemonState } = getDaemonInfo(targetRepo);
     const isRunning = daemonState ? isProcessAlive(daemonState.pid) : false;
-    const legacyRunningDaemon =
-      daemonState && isRunning && isLegacyDaemonState(daemonState) ? daemonState : null;
-    if (legacyRunningDaemon) {
-      process.kill(legacyRunningDaemon.pid, "SIGTERM");
-      await waitForProcessExit(legacyRunningDaemon.pid);
-      clearDaemonState(runtimePaths);
-    } else if (daemonState && isRunning) {
-      console.log(JSON.stringify(buildDaemonStatusPayload(daemonState, true, portOverride), null, 2));
+    if (daemonState && isRunning && isLegacyDaemonState(daemonState)) {
+      throw new Error(buildLegacyDaemonUpgradeMessage(targetRepo));
+    }
+    if (daemonState && isRunning) {
+      const runningConnection = resolveRunningDaemonConnection(targetRepo, daemonState.pid);
+      if (!runningConnection) {
+        throw new Error(
+          "Unable to verify the running browser daemon process. Run `npm run browser:stop` and then `npm run browser:start`."
+        );
+      }
+      if (runningConnection.port !== requestedPort) {
+        throw new Error(
+          `Browser daemon is already running on port ${runningConnection.port}. Stop it first before starting a daemon on port ${requestedPort}.`
+        );
+      }
+      console.log(JSON.stringify(buildDaemonStatusPayload(daemonState, true, runningConnection), null, 2));
       return;
     }
 
     clearDaemonState(runtimePaths);
-    const connection = getDaemonConnection(targetRepo, portOverride);
+    const metadata: DaemonProcessMetadata = {
+      repoHash: hashTargetRepo(targetRepo),
+      port: requestedPort,
+      nonce: makeDaemonNonce()
+    };
+    const connection = getDaemonConnection(targetRepo, metadata.port, metadata.nonce);
 
     const repoRoot = getRepoRoot();
     const tsxCliPath = path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
@@ -236,7 +318,12 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
         path.join(repoRoot, "src/browser/daemon-entry.ts"),
         "--repo",
         targetRepo,
-        ...(portOverride === undefined ? [] : ["--port", `${portOverride}`])
+        "--repo-hash",
+        metadata.repoHash,
+        "--port",
+        `${metadata.port}`,
+        "--nonce",
+        metadata.nonce
       ],
       {
         cwd: repoRoot,
@@ -247,7 +334,7 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
     child.unref();
     await waitForHealth(connection.host, connection.port);
     const currentState = getDaemonInfo(targetRepo).daemonState;
-    console.log(JSON.stringify(buildDaemonStatusPayload(currentState, true, portOverride), null, 2));
+    console.log(JSON.stringify(buildDaemonStatusPayload(currentState, true, connection), null, 2));
     return;
   }
 
@@ -268,17 +355,40 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
     const portOverride = readDaemonPortOption(args);
     const { daemonState } = getDaemonInfo(targetRepo);
     const isRunning = daemonState ? isProcessAlive(daemonState.pid) : false;
-    console.log(JSON.stringify(buildDaemonStatusPayload(daemonState, isRunning, portOverride), null, 2));
+    const connection =
+      daemonState && isRunning && !isLegacyDaemonState(daemonState)
+        ? resolveRunningDaemonConnection(targetRepo, daemonState.pid)
+        : null;
+    if (connection && portOverride !== undefined && portOverride !== connection.port) {
+      throw new Error(
+        `Browser daemon is running on port ${connection.port}. Re-run the command with --port ${connection.port} or restart the daemon on port ${portOverride}.`
+      );
+    }
+    console.log(JSON.stringify(buildDaemonStatusPayload(daemonState, isRunning, connection), null, 2));
     return;
   }
 
   if (subcommand === "token") {
-    const portOverride = readDaemonPortOption(args);
     const { daemonState } = getDaemonInfo(targetRepo);
     if (!daemonState || !isProcessAlive(daemonState.pid)) {
       throw new Error("Browser daemon is not running. Start it with `npm run browser:start`.");
     }
-    console.log(JSON.stringify(buildDaemonTokenPayload(daemonState, portOverride), null, 2));
+    if (isLegacyDaemonState(daemonState)) {
+      throw new Error(buildLegacyDaemonUpgradeMessage(targetRepo));
+    }
+    const connection = resolveRunningDaemonConnection(targetRepo, daemonState.pid);
+    if (!connection) {
+      throw new Error(
+        "Unable to verify the running browser daemon process. Run `npm run browser:stop` and then `npm run browser:start`."
+      );
+    }
+    const portOverride = readDaemonPortOption(args);
+    if (portOverride !== undefined && portOverride !== connection.port) {
+      throw new Error(
+        `Browser daemon is running on port ${connection.port}. Re-run the command with --port ${connection.port} or restart the daemon on port ${portOverride}.`
+      );
+    }
+    console.log(JSON.stringify(buildDaemonTokenPayload(daemonState, connection), null, 2));
     return;
   }
 

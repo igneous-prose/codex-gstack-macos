@@ -6,7 +6,7 @@ The browser daemon is local-only.
 - auth: bearer token required for command routes
 - runtime state: `.codex-gstack/browser` and `.codex-gstack/logs`
 - persisted daemon state excludes the host, port, and bearer token; those values are derived from the target repo when needed
-- manual port override: pass `--port <port>` to daemon-interacting commands when you need to avoid a derived-port collision
+- manual port override: pass `--port <port>` to `browser:start` when you need to avoid a derived-port collision; other daemon commands can discover the running daemon automatically and also accept `--port` as an explicit port match check
 - runtime permissions: owner-only for `.codex-gstack` directories and daemon state/log files
 - writes allowed only under the target repo and `/tmp`
 - command routes authenticate before JSON body parsing

@@ -3,6 +3,7 @@ import {
   DEFAULT_HOST,
   ensureRuntimePaths,
   getDaemonConnection,
+  type DaemonProcessMetadata,
   type RuntimePaths,
   resolveTargetRepo
 } from "./config.js";
@@ -17,7 +18,7 @@ import { startBrowserServer } from "./server.js";
 
 export interface StartDaemonOptions {
   readonly targetRepo: string;
-  readonly port?: number;
+  readonly metadata: DaemonProcessMetadata;
 }
 
 export function coerceAllowLocalhost(value: unknown): boolean {
@@ -27,7 +28,7 @@ export function coerceAllowLocalhost(value: unknown): boolean {
 export async function runDaemon(options: StartDaemonOptions): Promise<void> {
   const targetRepo = resolveTargetRepo(options.targetRepo);
   const runtimePaths = ensureRuntimePaths(targetRepo);
-  const connection = getDaemonConnection(targetRepo, options.port);
+  const connection = getDaemonConnection(targetRepo, options.metadata.port, options.metadata.nonce);
 
   const runtime = new BrowserRuntime(targetRepo);
   const serverInfo = await startBrowserServer({

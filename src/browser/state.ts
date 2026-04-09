@@ -1,6 +1,6 @@
 import { chmodSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 
-import { getDaemonConnection, PRIVATE_FILE_MODE } from "./config.js";
+import { PRIVATE_FILE_MODE } from "./config.js";
 import { type RuntimePaths } from "./config.js";
 
 export interface DaemonState {
@@ -37,9 +37,22 @@ export function isLegacyDaemonState(state: PersistedDaemonState): state is Legac
 
 export function redactDaemonState(
   state: PersistedDaemonState,
-  portOverride?: number
+  connectionOverride?: {
+    readonly host: string;
+    readonly port: number;
+  }
 ): PublicDaemonState {
-  const connection = getDaemonConnection(state.targetRepo, portOverride);
+  const connection = connectionOverride
+    ? connectionOverride
+    : isLegacyDaemonState(state)
+      ? {
+          host: state.host,
+          port: state.port
+        }
+      : {
+          host: "127.0.0.1",
+          port: 47770
+        };
   return {
     pid: state.pid,
     host: connection.host,

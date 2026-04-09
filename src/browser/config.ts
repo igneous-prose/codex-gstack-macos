@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -33,9 +33,27 @@ export interface DaemonConnection {
   readonly token: string;
 }
 
+export interface DaemonProcessMetadata {
+  readonly repoHash: string;
+  readonly port: number;
+  readonly nonce: string;
+}
+
 export function getDefaultDaemonPort(targetRepo: string): number {
   const digest = createHash("sha256").update(targetRepo).digest();
   return DEFAULT_PORT + (digest.readUInt16BE(0) % DAEMON_PORT_RANGE);
+}
+
+export function hashTargetRepo(targetRepo: string): string {
+  return createHash("sha256").update(targetRepo).digest("hex");
+}
+
+export function makeDaemonNonce(): string {
+  return randomBytes(24).toString("hex");
+}
+
+export function makeDaemonToken(targetRepo: string, port: number, nonce: string): string {
+  return createHash("sha256").update(`${targetRepo}\n${port}\n${nonce}`).digest("hex");
 }
 
 export function resolveTargetRepo(inputPath?: string): string {
@@ -71,16 +89,15 @@ export function ensureRuntimePaths(repoRoot: string): RuntimePaths {
   return runtimePaths;
 }
 
-export function getDaemonConnection(targetRepo: string, portOverride?: number): DaemonConnection {
-  const defaultPort = getDefaultDaemonPort(targetRepo);
-  const port = portOverride ?? defaultPort;
-  const digest = createHash("sha256")
-    .update(port === defaultPort ? targetRepo : `${targetRepo}\n${port}`)
-    .digest();
+export function getDaemonConnection(
+  targetRepo: string,
+  port: number,
+  nonce: string
+): DaemonConnection {
   return {
     host: DEFAULT_HOST,
     port,
-    token: digest.toString("hex")
+    token: makeDaemonToken(targetRepo, port, nonce)
   };
 }
 
