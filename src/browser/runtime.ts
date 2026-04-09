@@ -222,18 +222,9 @@ export class BrowserRuntime {
     outputPath: string,
     allowLocalhost = false
   ): Promise<{ outputPath: string }> {
-    const page = await (await this.getContext()).newPage();
-    const validatedUrl = validatePageUrl(url, allowLocalhost);
-    const validatedOutputPath = validateOutputPath(this.repoRoot, outputPath);
-    mkdirSync(path.dirname(validatedOutputPath), { recursive: true });
-
-    try {
-      await page.goto(validatedUrl, { waitUntil: "domcontentloaded" });
+    return this.capturePage(url, outputPath, allowLocalhost, async (page, validatedOutputPath) => {
       await page.screenshot({ path: validatedOutputPath, fullPage: true });
-      return { outputPath: validatedOutputPath };
-    } finally {
-      await page.close();
-    }
+    });
   }
 
   async snapshot(
@@ -241,18 +232,9 @@ export class BrowserRuntime {
     outputPath: string,
     allowLocalhost = false
   ): Promise<{ outputPath: string }> {
-    const page = await (await this.getContext()).newPage();
-    const validatedUrl = validatePageUrl(url, allowLocalhost);
-    const validatedOutputPath = validateOutputPath(this.repoRoot, outputPath);
-    mkdirSync(path.dirname(validatedOutputPath), { recursive: true });
-
-    try {
-      await page.goto(validatedUrl, { waitUntil: "domcontentloaded" });
+    return this.capturePage(url, outputPath, allowLocalhost, async (page, validatedOutputPath) => {
       writeFileSync(validatedOutputPath, await page.content(), "utf8");
-      return { outputPath: validatedOutputPath };
-    } finally {
-      await page.close();
-    }
+    });
   }
 
   listCookieDomains(browser: SupportedCookieBrowser): string[] {
@@ -269,6 +251,27 @@ export class BrowserRuntime {
     }
     await (await this.getContext()).addCookies(cookies);
     return { importedCount: cookies.length };
+  }
+
+  private async capturePage(
+    url: string,
+    outputPath: string,
+    allowLocalhost: boolean,
+    capture: (page: Awaited<ReturnType<BrowserContext["newPage"]>>, validatedOutputPath: string) => Promise<void>
+  ): Promise<{ outputPath: string }> {
+    const validatedUrl = validatePageUrl(url, allowLocalhost);
+    const validatedOutputPath = validateOutputPath(this.repoRoot, outputPath);
+    mkdirSync(path.dirname(validatedOutputPath), { recursive: true });
+
+    const page = await (await this.getContext()).newPage();
+
+    try {
+      await page.goto(validatedUrl, { waitUntil: "domcontentloaded" });
+      await capture(page, validatedOutputPath);
+      return { outputPath: validatedOutputPath };
+    } finally {
+      await page.close();
+    }
   }
 
   private async getContext(): Promise<BrowserContext> {
