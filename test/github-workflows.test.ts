@@ -30,11 +30,25 @@ describe("github workflows", () => {
     expect(releaseWorkflow).not.toContain("softprops/action-gh-release@v2");
   });
 
+  it("uses the official CodeQL workflow for javascript-typescript analysis", () => {
+    const codeqlWorkflow = readFileSync(
+      path.join(repoRoot, ".github", "workflows", "codeql.yml"),
+      "utf8"
+    );
+    expect(codeqlWorkflow).toContain("actions/checkout@v6");
+    expect(codeqlWorkflow).toContain("github/codeql-action/init@v4");
+    expect(codeqlWorkflow).toContain("github/codeql-action/analyze@v4");
+    expect(codeqlWorkflow).toContain("languages: javascript-typescript");
+    expect(codeqlWorkflow).toContain("queries: security-extended");
+    expect(codeqlWorkflow).toContain("security-events: write");
+  });
+
   it("keeps branch protection contexts aligned with CI jobs", () => {
     const configureGithub = readFileSync(
       path.join(repoRoot, "scripts", "configure-github.sh"),
       "utf8"
     );
     expect(configureGithub).toContain('"contexts": ["lint", "typecheck", "test", "security"]');
+    expect(configureGithub).toContain('"required_conversation_resolution": true');
   });
 });
