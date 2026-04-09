@@ -22,4 +22,6 @@ This project supports only local use on Apple Silicon macOS with Codex CLI and C
 
 ## Reporting
 
-If GitHub private vulnerability reporting is enabled for this repository, use it for security issues. Do not open public issues or pull requests that contain live cookie material, auth tokens, or filesystem paths you do not intend to disclose.
+If GitHub private vulnerability reporting is enabled for this repository, use it for security issues.
+
+If private vulnerability reporting is not available, contact the maintainer privately before sharing details and do not open a public issue or pull request with live cookie material, auth tokens, or filesystem paths you do not intend to disclose.

@@ -37,6 +37,20 @@ npm run browser:cookies:list -- --browser chrome
 npm run browser:cookies:import -- --repo /path/to/target-repo --browser chrome --domain example.com
 ```
 
-`browser:status` redacts the daemon token. Use `browser:token` only when you intentionally need to reveal it for a local call. The persisted daemon state file no longer stores the connection host, port, or bearer token. If two repos collide on the same derived daemon port, start the daemon with an explicit `--port` value for that repo. Later daemon-interacting commands discover the running daemon automatically, and they also accept `--port` when you want an explicit port match check. A plain `browser:start` remains idempotent even if the daemon is already running on an overridden port; only `browser:start --port <port>` demands an exact port match. If `browser:status` cannot verify the running daemon from the live PID metadata, it reports `status: "restart-required"` plus `daemonState.port: null` and `connectionVerified: false`, instead of treating the daemon as healthy. Page capture commands accept `http://` and `https://` URLs only, block literal wildcard, private-network, and local-scope IP targets, require `--allow-localhost` for local dev servers, fail closed when hostname policy resolution cannot be completed, and revalidate redirected request targets against the same network policy.
+## Browser Notes
 
-See [docs/install.md](docs/install.md), [docs/browser.md](docs/browser.md), and [docs/cookie-import.md](docs/cookie-import.md).
+- `browser:status` redacts the daemon token. Use `browser:token` only when you intentionally need to reveal it for a local call.
+- The persisted daemon state file does not store the connection host, port, or bearer token.
+- If two repos collide on the same derived daemon port, start the daemon with an explicit `--port` value for that repo.
+- Later daemon-interacting commands discover the running daemon automatically, and they also accept `--port` when you want an explicit port match check.
+- A plain `browser:start` remains idempotent even if the daemon is already running on an overridden port; only `browser:start --port <port>` demands an exact port match.
+- If `browser:status` cannot verify the running daemon from the live PID metadata, it reports `status: "restart-required"` plus `daemonState.port: null` and `connectionVerified: false`, instead of treating the daemon as healthy.
+- Page capture commands accept `http://` and `https://` URLs only, block literal wildcard, private-network, and local-scope IP targets, require `--allow-localhost` for local dev servers, fail closed when hostname policy resolution cannot be completed, and revalidate redirected request targets against the same network policy.
+
+## Project Docs
+
+- [docs/install.md](docs/install.md)
+- [docs/browser.md](docs/browser.md)
+- [docs/cookie-import.md](docs/cookie-import.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md)
