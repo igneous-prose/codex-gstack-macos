@@ -14,6 +14,9 @@ This project supports only local use on Apple Silicon macOS with Codex CLI and C
 - Cookie import is explicit, user-invoked, and disabled by default.
 - Cookie imports must not persist plaintext exports into repo state.
 - Browser navigation is limited to `http://` and `https://` URLs.
+- Browser network policy blocks literal and hostname-resolved private, loopback, and local-scope targets by default.
+- Hostname validation fails closed when DNS policy resolution cannot be completed.
+- Redirected request targets are revalidated against the same network policy during capture.
 - `browser:status` redacts the daemon token; token disclosure requires an explicit local command.
 - The repo ships no telemetry, no remote sharing, and no global hook installation.
 
