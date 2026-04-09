@@ -24,7 +24,7 @@ describe("github workflows", () => {
     );
     expect(releaseWorkflow).toContain("actions/checkout@v6");
     expect(releaseWorkflow).toContain(
-      "softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b"
+      "softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe"
     );
     expect(releaseWorkflow).not.toContain("actions/checkout@v4");
     expect(releaseWorkflow).not.toContain("softprops/action-gh-release@v2");
