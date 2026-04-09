@@ -8,7 +8,7 @@ The browser daemon is local-only.
 - runtime permissions: owner-only for `.codex-gstack` directories and daemon state/log files
 - writes allowed only under the target repo and `/tmp`
 - allowed navigation targets: `http://` and `https://` only
-- blocked by default: localhost/loopback targets and literal private-network IPv4 targets
+- blocked by default: localhost/loopback targets and literal wildcard, private-network, or local-scope IP targets, including local/private IPv6 literals
 - localhost access: allowed only when the page command includes `--allow-localhost`
 
 Normal status output redacts the daemon token. Reveal it only through the explicit local `npm run browser:token -- --repo /path/to/target-repo` command.

@@ -8,7 +8,7 @@ This summary reflects the current hardening state of `codex-gstack-macos`.
 - Runtime state lives only under `.codex-gstack/` and is treated as owner-only local state.
 - Normal daemon status output redacts the token; explicit token disclosure requires a separate local command.
 - Browser output writes are restricted to the target repo root and `/tmp`.
-- Browser page navigation is restricted to `http://` and `https://` URLs.
+- Browser page navigation is restricted to `http://` and `https://` URLs and blocks literal wildcard, private-network, and local-scope IP targets across IPv4, IPv4-mapped IPv6, and native IPv6 ranges.
 - Cookie import remains explicit, manual, and off the default path.
 - Cookie helper execution uses pinned macOS system binaries: `/usr/bin/sqlite3` and `/usr/bin/security`.
 - The repo still avoids telemetry, global Codex config edits, tunnels, and remote browser sharing.

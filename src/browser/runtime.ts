@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
+import { isIP } from "node:net";
 import path from "node:path";
 
 import { chromium, type Browser, type BrowserContext } from "playwright";
@@ -9,10 +10,14 @@ import { validateOutputPath } from "./path-policy.js";
 
 function normalizeHostLiteral(host: string): string {
   const normalizedHost = host.trim().toLowerCase();
-  if (normalizedHost.startsWith("[") && normalizedHost.endsWith("]")) {
-    return normalizedHost.slice(1, -1);
+  const withoutBrackets =
+    normalizedHost.startsWith("[") && normalizedHost.endsWith("]")
+      ? normalizedHost.slice(1, -1)
+      : normalizedHost;
+  if (withoutBrackets.endsWith(".")) {
+    return withoutBrackets.replace(/\.+$/, "");
   }
-  return normalizedHost;
+  return withoutBrackets;
 }
 
 function isIpv4Address(host: string): boolean {
@@ -45,6 +50,10 @@ function isBlockedPrivateIpv4(host: string): boolean {
     return true;
   }
 
+  if (first === 0) {
+    return true;
+  }
+
   if (first === 127) {
     return true;
   }
@@ -67,6 +76,54 @@ function isBlockedPrivateIpv4(host: string): boolean {
 function isLocalhostHost(host: string): boolean {
   const normalizedHost = normalizeHostLiteral(host);
   return normalizedHost === "localhost" || normalizedHost === "127.0.0.1" || normalizedHost === "::1";
+}
+
+function firstIpv6Hextet(host: string): number | null {
+  const normalizedHost = normalizeHostLiteral(host);
+  if (isIP(normalizedHost) !== 6) {
+    return null;
+  }
+
+  if (normalizedHost.startsWith("::")) {
+    return 0;
+  }
+
+  const firstChunk = normalizedHost.split(":")[0];
+  if (!firstChunk || !/^[0-9a-f]{1,4}$/i.test(firstChunk)) {
+    return null;
+  }
+
+  return Number.parseInt(firstChunk, 16);
+}
+
+function isBlockedPrivateIpv6(host: string): boolean {
+  const normalizedHost = normalizeHostLiteral(host);
+  if (isIP(normalizedHost) !== 6) {
+    return false;
+  }
+
+  if (normalizedHost === "::") {
+    return true;
+  }
+
+  const firstHextet = firstIpv6Hextet(normalizedHost);
+  if (firstHextet === null) {
+    return false;
+  }
+
+  if ((firstHextet & 0xffc0) === 0xfe80) {
+    return true;
+  }
+
+  if ((firstHextet & 0xfe00) === 0xfc00) {
+    return true;
+  }
+
+  if ((firstHextet & 0xffc0) === 0xfec0) {
+    return true;
+  }
+
+  return false;
 }
 
 function parseMappedIpv4FromIpv6(host: string): string | null {
@@ -137,6 +194,10 @@ function validatePageUrl(candidateUrl: string, allowLocalhost = false): string {
   }
 
   if (isBlockedPrivateIpv4(host)) {
+    throw new Error("Private and loopback IP targets are blocked.");
+  }
+
+  if (isBlockedPrivateIpv6(host)) {
     throw new Error("Private and loopback IP targets are blocked.");
   }
 
