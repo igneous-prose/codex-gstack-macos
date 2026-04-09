@@ -3,7 +3,13 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import path from "node:path";
 
-import { chromium, type Browser, type BrowserContext } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type Page,
+  type Route
+} from "playwright";
 
 import { type SupportedCookieBrowser } from "./config.js";
 import { importCookiesForDomains, listCookieDomains } from "./chromium-cookies.js";
@@ -187,36 +193,54 @@ function classifyResolvedAddress(address: string): "loopback" | "private" | "pub
   return "public";
 }
 
-async function validateResolvedHostname(host: string, allowLocalhost: boolean): Promise<void> {
+type ResolvedHostnameClassification = "loopback" | "private" | "public";
+
+async function classifyResolvedHostname(host: string): Promise<ResolvedHostnameClassification> {
   const normalizedHost = normalizeHostLiteral(host);
   if (isIP(normalizedHost) !== 0) {
-    return;
+    return "public";
   }
 
   let resolvedAddresses: { address: string; family: number }[];
   try {
     resolvedAddresses = await lookup(normalizedHost, { all: true, verbatim: true });
   } catch {
-    return;
+    throw new Error("Unable to resolve hostname for network policy validation.");
+  }
+
+  if (resolvedAddresses.length === 0) {
+    throw new Error("Unable to resolve hostname for network policy validation.");
   }
 
   let sawLoopback = false;
   for (const entry of resolvedAddresses) {
     const classification = classifyResolvedAddress(entry.address);
     if (classification === "private") {
-      throw new Error("Private and loopback IP targets are blocked.");
+      return "private";
     }
     if (classification === "loopback") {
       sawLoopback = true;
     }
   }
 
-  if (sawLoopback && !allowLocalhost) {
+  return sawLoopback ? "loopback" : "public";
+}
+
+async function validateResolvedHostname(host: string, allowLocalhost: boolean): Promise<void> {
+  const classification = await classifyResolvedHostname(host);
+  if (classification === "private") {
+    throw new Error("Private and loopback IP targets are blocked.");
+  }
+
+  if (classification === "loopback" && !allowLocalhost) {
     throw new Error("Localhost targets require --allow-localhost for local dev verification.");
   }
 }
 
-async function validatePageUrl(candidateUrl: string, allowLocalhost = false): Promise<string> {
+async function validatePageUrl(
+  candidateUrl: string,
+  allowLocalhost = false
+): Promise<string> {
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(candidateUrl);
@@ -261,6 +285,29 @@ async function validatePageUrl(candidateUrl: string, allowLocalhost = false): Pr
 
   await validateResolvedHostname(host, allowLocalhost);
   return parsedUrl.toString();
+}
+
+async function installRequestGuard(
+  page: Page,
+  allowLocalhost: boolean,
+  setBlockedError: (error: Error) => void
+): Promise<() => Promise<void>> {
+  const handler = async (route: Route): Promise<void> => {
+    try {
+      await validatePageUrl(route.request().url(), allowLocalhost);
+      await route.continue();
+    } catch (error) {
+      setBlockedError(
+        error instanceof Error ? error : new Error("Blocked request by network policy.")
+      );
+      await route.abort("blockedbyclient");
+    }
+  };
+
+  await page.route("**/*", handler);
+  return async () => {
+    await page.unroute("**/*", handler);
+  };
 }
 
 export class BrowserRuntime {
@@ -327,12 +374,34 @@ export class BrowserRuntime {
 
     return this.runExclusive(async () => {
       const page = await (await this.getContext()).newPage();
+      let blockedError: Error | null = null;
+      const removeRequestGuard = await installRequestGuard(
+        page,
+        allowLocalhost,
+        (error) => {
+          blockedError = error;
+        }
+      );
 
       try {
-        await page.goto(validatedUrl, { waitUntil: "domcontentloaded" });
+        try {
+          await page.goto(validatedUrl, { waitUntil: "domcontentloaded" });
+        } catch (error) {
+          if (blockedError) {
+            throw blockedError;
+          }
+          throw error;
+        }
+        if (blockedError) {
+          throw blockedError;
+        }
         await capture(page, validatedOutputPath);
+        if (blockedError) {
+          throw blockedError;
+        }
         return { outputPath: validatedOutputPath };
       } finally {
+        await removeRequestGuard();
         await page.close();
       }
     });

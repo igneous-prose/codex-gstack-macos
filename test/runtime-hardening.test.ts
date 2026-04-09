@@ -8,11 +8,25 @@ const dnsMocks = vi.hoisted(() => ({
   lookup: vi.fn()
 }));
 
+const routeState = vi.hoisted(() => ({
+  handler: undefined as
+    | ((route: {
+        request: () => { url: () => string };
+        continue: () => Promise<void>;
+        abort: (errorCode?: string) => Promise<void>;
+      }) => Promise<void>)
+    | undefined
+}));
+
 const playwrightMocks = vi.hoisted(() => ({
   launch: vi.fn(),
   newContext: vi.fn(),
   newPage: vi.fn(),
   goto: vi.fn(),
+  routePage: vi.fn(),
+  unroutePage: vi.fn(),
+  continueRoute: vi.fn(),
+  abortRoute: vi.fn(),
   screenshot: vi.fn(),
   content: vi.fn(),
   addCookies: vi.fn(),
@@ -54,9 +68,12 @@ describe("runtime hardening", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    routeState.handler = undefined;
 
     const page = {
       goto: playwrightMocks.goto,
+      route: playwrightMocks.routePage,
+      unroute: playwrightMocks.unroutePage,
       screenshot: playwrightMocks.screenshot,
       content: playwrightMocks.content,
       close: playwrightMocks.closePage
@@ -72,6 +89,12 @@ describe("runtime hardening", () => {
     };
 
     playwrightMocks.goto.mockResolvedValue(undefined);
+    playwrightMocks.routePage.mockImplementation(async (_pattern: string, handler: typeof routeState.handler) => {
+      routeState.handler = handler ?? undefined;
+    });
+    playwrightMocks.unroutePage.mockResolvedValue(undefined);
+    playwrightMocks.continueRoute.mockResolvedValue(undefined);
+    playwrightMocks.abortRoute.mockResolvedValue(undefined);
     playwrightMocks.screenshot.mockResolvedValue(undefined);
     playwrightMocks.content.mockResolvedValue("<html></html>");
     playwrightMocks.addCookies.mockResolvedValue(undefined);
@@ -250,6 +273,22 @@ describe("runtime hardening", () => {
     );
   });
 
+  it("fails closed when hostname resolution cannot be completed", async () => {
+    dnsMocks.lookup.mockRejectedValueOnce(Object.assign(new Error("lookup failed"), { code: "ENOTFOUND" }));
+
+    await expect(validatePageUrl("http://missing.example:3000", false)).rejects.toThrow(
+      /Unable to resolve hostname/
+    );
+  });
+
+  it("fails closed on transient DNS resolution errors", async () => {
+    dnsMocks.lookup.mockRejectedValueOnce(Object.assign(new Error("temporary failure"), { code: "EAI_AGAIN" }));
+
+    await expect(validatePageUrl("http://transient.example:3000", false)).rejects.toThrow(
+      /Unable to resolve hostname/
+    );
+  });
+
   it("parses --allow-localhost only on page commands", () => {
     expect(
       buildPageCommandRequest([
@@ -368,6 +407,65 @@ describe("runtime hardening", () => {
 
     expect(playwrightMocks.newPage).toHaveBeenCalledOnce();
     expect(playwrightMocks.closePage).toHaveBeenCalledOnce();
+  });
+
+  it("blocks redirected requests to private targets during capture", async () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-runtime-"));
+    tempDirs.push(targetRepo);
+    const runtime = new BrowserRuntime(targetRepo);
+
+    playwrightMocks.goto.mockImplementationOnce(async () => {
+      await routeState.handler?.({
+        request: () => ({ url: () => "http://private.example:3000/redirected" }),
+        continue: playwrightMocks.continueRoute,
+        abort: playwrightMocks.abortRoute
+      });
+    });
+
+    await expect(runtime.screenshot("https://example.com", "/tmp/out.png", false)).rejects.toThrow(
+      /Private and loopback IP/
+    );
+
+    expect(playwrightMocks.abortRoute).toHaveBeenCalledWith("blockedbyclient");
+    expect(playwrightMocks.closePage).toHaveBeenCalledOnce();
+  });
+
+  it("revalidates hostnames during capture to block DNS rebinding", async () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-runtime-"));
+    tempDirs.push(targetRepo);
+    const runtime = new BrowserRuntime(targetRepo);
+    let rebindLookupCount = 0;
+
+    dnsMocks.lookup.mockImplementation(async (hostname: string) => {
+      if (hostname === "rebind.example") {
+        rebindLookupCount += 1;
+        if (rebindLookupCount === 1) {
+          return [{ address: "93.184.216.34", family: 4 }];
+        }
+        return [{ address: "127.0.0.1", family: 4 }];
+      }
+
+      if (hostname === "example.com") {
+        return [{ address: "93.184.216.34", family: 4 }];
+      }
+
+      return [{ address: "93.184.216.35", family: 4 }];
+    });
+
+    playwrightMocks.goto.mockImplementationOnce(async () => {
+      await routeState.handler?.({
+        request: () => ({ url: () => "http://rebind.example:3000/" }),
+        continue: playwrightMocks.continueRoute,
+        abort: playwrightMocks.abortRoute
+      });
+    });
+
+    await expect(runtime.screenshot("http://rebind.example:3000", "/tmp/out.png", false)).rejects.toThrow(
+      /--allow-localhost/
+    );
+
+    expect(rebindLookupCount).toBe(2);
+    expect(playwrightMocks.abortRoute).toHaveBeenCalledWith("blockedbyclient");
   });
 
   it("serializes browser page operations through a single runtime slot", async () => {
