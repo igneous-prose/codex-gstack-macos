@@ -1,6 +1,6 @@
 # codex-gstack-macos
 
-`codex-gstack-macos` is a Codex-only, macOS-only workflow kit for local repo skills and a localhost-only browser daemon.
+`codex-gstack-macos` is a Codex-only, macOS-only workflow kit that restores the original gstack planning loop for Codex while keeping the hardened localhost-only browser daemon.
 
 ## Boundaries
 
@@ -9,6 +9,7 @@
 - Repository visibility does not change the runtime exposure: the tool remains local-only even if the repo is public
 - Repo-local install first via `.agents/skills/*`
 - Runtime state only under `.codex-gstack/` inside the target repo
+- Tracked workflow artifacts under `docs/gstack/` inside the target repo
 - No Claude integration
 - No global Codex config edits
 - No telemetry, ngrok, remote sharing, or background self-update paths
@@ -18,9 +19,19 @@
 
 ```bash
 bash scripts/bootstrap-macos.sh
+bash scripts/setup.sh --host codex
+bash scripts/bootstrap-repo.sh required /path/to/target-repo
 bash scripts/install-repo-local.sh /path/to/target-repo
 bash scripts/doctor.sh /path/to/target-repo
 ```
+
+## Workflow Loop
+
+- Start with `codex-gstack-router` for freeform requests
+- Use `codex-gstack-office-hours` to turn raw thoughts into `docs/gstack/<initiative-id>/brief.md`
+- Use `codex-gstack-autoplan` to produce `docs/gstack/<initiative-id>/plan.md`
+- Use `codex-gstack-retro` to write `docs/gstack/<initiative-id>/retro.md` and update `.codex-gstack/workflow/learnings.json`
+- Multi-step routes such as `codex-gstack-autoplan` should ask for confirmation before running
 
 ## Browser Commands
 
@@ -52,5 +63,6 @@ npm run browser:cookies:import -- --repo /path/to/target-repo --browser chrome -
 - [docs/install.md](docs/install.md)
 - [docs/browser.md](docs/browser.md)
 - [docs/cookie-import.md](docs/cookie-import.md)
+- [docs/gstack/README.md](docs/gstack/README.md)
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [SECURITY.md](SECURITY.md)

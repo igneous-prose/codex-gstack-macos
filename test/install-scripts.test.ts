@@ -25,15 +25,28 @@ describe("install-repo-local.sh", () => {
       cwd: repoRoot
     });
 
-    expect(readdirSync(targetRepo).sort()).toEqual([".agents", ".codex-gstack"]);
+    expect(readdirSync(targetRepo).sort()).toEqual([".agents", ".codex-gstack", "docs"]);
     expect(readdirSync(path.join(targetRepo, ".agents", "skills")).sort()).toEqual([
+      "codex-gstack-autoplan",
       "codex-gstack-browse",
       "codex-gstack-document-release",
+      "codex-gstack-office-hours",
       "codex-gstack-plan",
+      "codex-gstack-plan-ceo-review",
+      "codex-gstack-plan-design-review",
+      "codex-gstack-plan-eng-review",
       "codex-gstack-qa",
+      "codex-gstack-retro",
       "codex-gstack-review",
+      "codex-gstack-router",
       "codex-gstack-security-review",
       "codex-gstack-ship"
     ]);
+    expect(readdirSync(path.join(targetRepo, ".codex-gstack")).sort()).toEqual([
+      "browser",
+      "logs",
+      "workflow"
+    ]);
+    expect(readdirSync(path.join(targetRepo, "docs")).sort()).toEqual(["gstack"]);
   });
 });

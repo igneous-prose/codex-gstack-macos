@@ -13,11 +13,18 @@ describe("skill surface", () => {
         .filter((entry) => !entry.startsWith("."))
         .sort()
     ).toEqual([
+      "codex-gstack-autoplan",
       "codex-gstack-browse",
       "codex-gstack-document-release",
+      "codex-gstack-office-hours",
       "codex-gstack-plan",
+      "codex-gstack-plan-ceo-review",
+      "codex-gstack-plan-design-review",
+      "codex-gstack-plan-eng-review",
       "codex-gstack-qa",
+      "codex-gstack-retro",
       "codex-gstack-review",
+      "codex-gstack-router",
       "codex-gstack-security-review",
       "codex-gstack-ship"
     ]);
