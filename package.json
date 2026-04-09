@@ -16,6 +16,7 @@
     "browser:start": "tsx src/browser/cli.ts daemon start",
     "browser:stop": "tsx src/browser/cli.ts daemon stop",
     "browser:status": "tsx src/browser/cli.ts daemon status",
+    "browser:token": "tsx src/browser/cli.ts daemon token",
     "browser:screenshot": "tsx src/browser/cli.ts page screenshot",
     "browser:snapshot": "tsx src/browser/cli.ts page snapshot",
     "browser:cookies:list": "tsx src/browser/cli.ts cookies list-domains",

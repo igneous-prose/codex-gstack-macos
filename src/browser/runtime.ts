@@ -7,6 +7,21 @@ import { type SupportedCookieBrowser } from "./config.js";
 import { importCookiesForDomains, listCookieDomains } from "./chromium-cookies.js";
 import { validateOutputPath } from "./path-policy.js";
 
+function validatePageUrl(candidateUrl: string): string {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(candidateUrl);
+  } catch {
+    throw new Error(`Invalid URL: ${candidateUrl}`);
+  }
+
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    throw new Error("Only http:// and https:// URLs are allowed.");
+  }
+
+  return parsedUrl.toString();
+}
+
 export class BrowserRuntime {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
@@ -22,11 +37,12 @@ export class BrowserRuntime {
 
   async screenshot(url: string, outputPath: string): Promise<{ outputPath: string }> {
     const page = await (await this.getContext()).newPage();
+    const validatedUrl = validatePageUrl(url);
     const validatedOutputPath = validateOutputPath(this.repoRoot, outputPath);
     mkdirSync(path.dirname(validatedOutputPath), { recursive: true });
 
     try {
-      await page.goto(url, { waitUntil: "domcontentloaded" });
+      await page.goto(validatedUrl, { waitUntil: "domcontentloaded" });
       await page.screenshot({ path: validatedOutputPath, fullPage: true });
       return { outputPath: validatedOutputPath };
     } finally {
@@ -36,11 +52,12 @@ export class BrowserRuntime {
 
   async snapshot(url: string, outputPath: string): Promise<{ outputPath: string }> {
     const page = await (await this.getContext()).newPage();
+    const validatedUrl = validatePageUrl(url);
     const validatedOutputPath = validateOutputPath(this.repoRoot, outputPath);
     mkdirSync(path.dirname(validatedOutputPath), { recursive: true });
 
     try {
-      await page.goto(url, { waitUntil: "domcontentloaded" });
+      await page.goto(validatedUrl, { waitUntil: "domcontentloaded" });
       writeFileSync(validatedOutputPath, await page.content(), "utf8");
       return { outputPath: validatedOutputPath };
     } finally {
@@ -76,3 +93,5 @@ export class BrowserRuntime {
     return this.context;
   }
 }
+
+export { validatePageUrl };

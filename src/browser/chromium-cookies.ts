@@ -8,6 +8,9 @@ import type { BrowserContext } from "playwright";
 
 import { type SupportedCookieBrowser } from "./config.js";
 
+export const SQLITE3_BINARY = "/usr/bin/sqlite3";
+export const SECURITY_BINARY = "/usr/bin/security";
+
 interface BrowserProfile {
   readonly browser: SupportedCookieBrowser;
   readonly appSupportPath: string;
@@ -70,13 +73,21 @@ function withCopiedDb<T>(dbPath: string, callback: (tempDbPath: string) => T): T
 }
 
 function querySqlite(dbPath: string, sql: string): string {
-  return execFileSync("sqlite3", ["-separator", "\t", dbPath, sql], {
+  if (!existsSync(SQLITE3_BINARY)) {
+    throw new Error(`Required system binary is missing: ${SQLITE3_BINARY}`);
+  }
+
+  return execFileSync(SQLITE3_BINARY, ["-separator", "\t", dbPath, sql], {
     encoding: "utf8"
   }).trim();
 }
 
 function getSafeStoragePassword(service: string): string {
-  return execFileSync("security", ["find-generic-password", "-w", "-s", service], {
+  if (!existsSync(SECURITY_BINARY)) {
+    throw new Error(`Required system binary is missing: ${SECURITY_BINARY}`);
+  }
+
+  return execFileSync(SECURITY_BINARY, ["find-generic-password", "-w", "-s", service], {
     encoding: "utf8"
   }).trim();
 }

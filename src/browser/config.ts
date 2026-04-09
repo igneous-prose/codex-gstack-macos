@@ -1,9 +1,11 @@
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_PORT = 47770;
+export const PRIVATE_DIRECTORY_MODE = 0o700;
+export const PRIVATE_FILE_MODE = 0o600;
 
 export type SupportedCookieBrowser = "brave" | "chrome" | "chromium" | "edge";
 
@@ -47,8 +49,12 @@ export function getRuntimePaths(repoRoot: string): RuntimePaths {
 
 export function ensureRuntimePaths(repoRoot: string): RuntimePaths {
   const runtimePaths = getRuntimePaths(repoRoot);
-  mkdirSync(runtimePaths.browserDir, { recursive: true });
-  mkdirSync(runtimePaths.logsDir, { recursive: true });
+  mkdirSync(runtimePaths.runtimeRoot, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
+  mkdirSync(runtimePaths.browserDir, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
+  mkdirSync(runtimePaths.logsDir, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
+  chmodSync(runtimePaths.runtimeRoot, PRIVATE_DIRECTORY_MODE);
+  chmodSync(runtimePaths.browserDir, PRIVATE_DIRECTORY_MODE);
+  chmodSync(runtimePaths.logsDir, PRIVATE_DIRECTORY_MODE);
   return runtimePaths;
 }
 
@@ -60,4 +66,3 @@ export function assertMacosArm64(): void {
     throw new Error("This tool supports only Apple Silicon (arm64).");
   }
 }
-

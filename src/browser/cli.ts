@@ -1,13 +1,13 @@
-import { openSync } from "node:fs";
+import { chmodSync, openSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { listCookieDomains } from "./chromium-cookies.js";
-import { type SupportedCookieBrowser } from "./config.js";
+import { PRIVATE_FILE_MODE, type SupportedCookieBrowser } from "./config.js";
 import { DEFAULT_DAEMON_PORT, getDaemonInfo, makeToken } from "./daemon.js";
 import { ensureRuntimePaths, resolveTargetRepo } from "./config.js";
-import { clearDaemonState, isProcessAlive } from "./state.js";
+import { clearDaemonState, isProcessAlive, redactDaemonState, type DaemonState } from "./state.js";
 
 function getRepoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -28,6 +28,31 @@ function readMultiOption(args: string[], name: string): string[] {
     }
   }
   return values;
+}
+
+export function openDaemonLogFile(logFilePath: string): number {
+  const logFd = openSync(logFilePath, "a", PRIVATE_FILE_MODE);
+  chmodSync(logFilePath, PRIVATE_FILE_MODE);
+  return logFd;
+}
+
+export function buildDaemonStatusPayload(
+  daemonState: DaemonState | null,
+  isRunning: boolean
+): Record<string, unknown> {
+  return {
+    status: isRunning ? "running" : "stopped",
+    daemonState: daemonState ? redactDaemonState(daemonState) : null,
+    ...(daemonState
+      ? {
+          tokenHint: "Run `npm run browser:token -- --repo <target-repo>` to reveal the bearer token."
+        }
+      : {})
+  };
+}
+
+export function buildDaemonTokenPayload(daemonState: DaemonState): Record<string, unknown> {
+  return { token: daemonState.token };
 }
 
 async function waitForHealth(host: string, port: number): Promise<void> {
@@ -78,7 +103,7 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
   if (subcommand === "start") {
     const { runtimePaths, daemonState } = getDaemonInfo(targetRepo);
     if (daemonState && isProcessAlive(daemonState.pid)) {
-      console.log(JSON.stringify({ status: "running", ...daemonState }, null, 2));
+      console.log(JSON.stringify(buildDaemonStatusPayload(daemonState, true), null, 2));
       return;
     }
 
@@ -88,7 +113,7 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
     const token = readOption(args, "--token") ?? makeToken();
     const repoRoot = getRepoRoot();
     const tsxCliPath = path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
-    const logFd = openSync(runtimePaths.daemonLogFile, "a");
+    const logFd = openDaemonLogFile(runtimePaths.daemonLogFile);
     const child = spawn(
       process.execPath,
       [tsxCliPath, path.join(repoRoot, "src/browser/daemon-entry.ts"), "--repo", targetRepo, "--port", `${port}`, "--token", token],
@@ -101,7 +126,7 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
     child.unref();
     await waitForHealth("127.0.0.1", port);
     const currentState = getDaemonInfo(targetRepo).daemonState;
-    console.log(JSON.stringify({ status: "running", ...currentState }, null, 2));
+    console.log(JSON.stringify(buildDaemonStatusPayload(currentState, true), null, 2));
     return;
   }
 
@@ -121,7 +146,16 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
   if (subcommand === "status") {
     const { daemonState } = getDaemonInfo(targetRepo);
     const isRunning = daemonState ? isProcessAlive(daemonState.pid) : false;
-    console.log(JSON.stringify({ status: isRunning ? "running" : "stopped", daemonState }, null, 2));
+    console.log(JSON.stringify(buildDaemonStatusPayload(daemonState, isRunning), null, 2));
+    return;
+  }
+
+  if (subcommand === "token") {
+    const { daemonState } = getDaemonInfo(targetRepo);
+    if (!daemonState || !isProcessAlive(daemonState.pid)) {
+      throw new Error("Browser daemon is not running. Start it with `npm run browser:start`.");
+    }
+    console.log(JSON.stringify(buildDaemonTokenPayload(daemonState), null, 2));
     return;
   }
 
@@ -202,4 +236,9 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
+const modulePath = fileURLToPath(import.meta.url);
+
+if (entryPath === modulePath) {
+  await main();
+}

@@ -1,0 +1,108 @@
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  PRIVATE_DIRECTORY_MODE,
+  PRIVATE_FILE_MODE,
+  ensureRuntimePaths
+} from "../src/browser/config.js";
+import {
+  buildDaemonStatusPayload,
+  buildDaemonTokenPayload,
+  openDaemonLogFile
+} from "../src/browser/cli.js";
+import {
+  SECURITY_BINARY,
+  SQLITE3_BINARY
+} from "../src/browser/chromium-cookies.js";
+import { redactDaemonState, writeDaemonState } from "../src/browser/state.js";
+import { validatePageUrl } from "../src/browser/runtime.js";
+
+describe("runtime hardening", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const tempDir of tempDirs) {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("creates runtime directories and files with owner-only permissions", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-sec-"));
+    tempDirs.push(targetRepo);
+
+    const runtimePaths = ensureRuntimePaths(targetRepo);
+    writeDaemonState(runtimePaths, {
+      pid: process.pid,
+      host: "127.0.0.1",
+      port: 47770,
+      token: "secret-token",
+      targetRepo,
+      startedAt: "2026-04-09T10:00:00.000Z"
+    });
+    const logFd = openDaemonLogFile(runtimePaths.daemonLogFile);
+    writeFileSync(logFd, "", "utf8");
+
+    expect(statSync(runtimePaths.runtimeRoot).mode & 0o777).toBe(PRIVATE_DIRECTORY_MODE);
+    expect(statSync(runtimePaths.browserDir).mode & 0o777).toBe(PRIVATE_DIRECTORY_MODE);
+    expect(statSync(runtimePaths.logsDir).mode & 0o777).toBe(PRIVATE_DIRECTORY_MODE);
+    expect(statSync(runtimePaths.daemonStateFile).mode & 0o777).toBe(PRIVATE_FILE_MODE);
+    expect(statSync(runtimePaths.daemonLogFile).mode & 0o777).toBe(PRIVATE_FILE_MODE);
+  });
+
+  it("redacts daemon state for normal output", () => {
+    expect(
+      redactDaemonState({
+        pid: 123,
+        host: "127.0.0.1",
+        port: 47770,
+        token: "secret-token",
+        targetRepo: "/tmp/repo",
+        startedAt: "2026-04-09T10:00:00.000Z"
+      })
+    ).toEqual({
+      pid: 123,
+      host: "127.0.0.1",
+      port: 47770,
+      targetRepo: "/tmp/repo",
+      startedAt: "2026-04-09T10:00:00.000Z",
+      token: "[redacted]",
+      tokenRedacted: true
+    });
+  });
+
+  it("requires the explicit daemon token command to reveal the token", () => {
+    const daemonState = {
+      pid: process.pid,
+      host: "127.0.0.1",
+      port: 47770,
+      token: "secret-token",
+      targetRepo: "/tmp/repo",
+      startedAt: "2026-04-09T10:00:00.000Z"
+    };
+
+    const statusPayload = buildDaemonStatusPayload(daemonState, true);
+    const tokenPayload = buildDaemonTokenPayload(daemonState);
+
+    expect(JSON.stringify(statusPayload)).toContain('"token":"[redacted]"');
+    expect(JSON.stringify(statusPayload)).not.toContain("secret-token");
+    expect(statusPayload).toHaveProperty("tokenHint");
+    expect(tokenPayload).toEqual({ token: "secret-token" });
+  });
+
+  it("allows only http and https page URLs", () => {
+    expect(validatePageUrl("https://example.com/path")).toBe("https://example.com/path");
+    expect(validatePageUrl("http://example.com/path")).toBe("http://example.com/path");
+    expect(() => validatePageUrl("file:///etc/passwd")).toThrow(/Only http:\/\/ and https:\/\//);
+    expect(() => validatePageUrl("data:text/plain,hello")).toThrow(/Only http:\/\/ and https:\/\//);
+    expect(() => validatePageUrl("javascript:alert(1)")).toThrow(/Only http:\/\/ and https:\/\//);
+  });
+
+  it("pins cookie helper binaries to absolute macOS system paths", () => {
+    expect(SQLITE3_BINARY).toBe("/usr/bin/sqlite3");
+    expect(SECURITY_BINARY).toBe("/usr/bin/security");
+  });
+});
