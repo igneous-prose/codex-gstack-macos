@@ -145,6 +145,66 @@ describe("live browser server hardening", () => {
     expect(handlers.screenshot).toHaveBeenCalledOnce();
   });
 
+  it("returns 400 for authenticated invalid page payloads", async () => {
+    const { baseUrl, handlers } = await startTestServer();
+
+    const response = await fetch(`${baseUrl}/page/screenshot`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer secret-token",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        url: "https://example.com",
+        outputPath: "/tmp/out.png",
+        allowLocalhost: "true"
+      })
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "allowLocalhost must be a boolean." });
+    expect(handlers.screenshot).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for unsupported cookie browser queries", async () => {
+    const { baseUrl, handlers } = await startTestServer();
+
+    const response = await fetch(`${baseUrl}/cookies/domains?browser=safari`, {
+      method: "GET",
+      headers: {
+        authorization: "Bearer secret-token"
+      }
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "browser must be one of: brave, chrome, chromium, edge."
+    });
+    expect(handlers.listCookieDomains).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for invalid cookie import payloads", async () => {
+    const { baseUrl, handlers } = await startTestServer();
+
+    const response = await fetch(`${baseUrl}/cookies/import`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer secret-token",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        browser: "chrome",
+        domains: [1, "example.com"]
+      })
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "domains must be an array of strings."
+    });
+    expect(handlers.importCookies).not.toHaveBeenCalled();
+  });
+
   it("returns 404 for unknown post routes without parsing the body", async () => {
     const { baseUrl, handlers } = await startTestServer();
 

@@ -1,7 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
-import { DEFAULT_HOST } from "./config.js";
-import { type SupportedCookieBrowser } from "./config.js";
+import { DEFAULT_HOST, SUPPORTED_COOKIE_BROWSERS, type SupportedCookieBrowser } from "./config.js";
 
 interface PageCommandPayload {
   readonly url: string;
@@ -77,6 +76,27 @@ class HttpBodyError extends Error {
   }
 }
 
+class RequestValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RequestValidationError";
+  }
+}
+
+type ValidatedRoute =
+  | {
+      readonly kind: "page-screenshot" | "page-snapshot";
+      readonly payload: PageCommandPayload;
+    }
+  | {
+      readonly kind: "cookies-domains";
+      readonly browser: SupportedCookieBrowser;
+    }
+  | {
+      readonly kind: "cookies-import";
+      readonly payload: CookieImportPayload;
+    };
+
 function writeJson(response: ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(`${JSON.stringify(body)}\n`);
@@ -146,6 +166,127 @@ function parseJsonBody<T>(rawBody: string | undefined): T {
   }
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requirePlainObject(value: unknown): Record<string, unknown> {
+  if (!isPlainObject(value)) {
+    throw new RequestValidationError("Request body must be a JSON object.");
+  }
+  return value;
+}
+
+function requireNonEmptyString(value: unknown, fieldName: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new RequestValidationError(`${fieldName} must be a non-empty string.`);
+  }
+  return value;
+}
+
+function requireBoolean(value: unknown, fieldName: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new RequestValidationError(`${fieldName} must be a boolean.`);
+  }
+  return value;
+}
+
+function isSupportedCookieBrowser(value: unknown): value is SupportedCookieBrowser {
+  return (
+    typeof value === "string" &&
+    SUPPORTED_COOKIE_BROWSERS.includes(value as SupportedCookieBrowser)
+  );
+}
+
+function requireSupportedCookieBrowser(
+  value: unknown,
+  fieldName: string,
+  missingMessage?: string
+): SupportedCookieBrowser {
+  if (value === null || value === undefined || value === "") {
+    throw new RequestValidationError(missingMessage ?? `${fieldName} is required.`);
+  }
+
+  if (!isSupportedCookieBrowser(value)) {
+    throw new RequestValidationError(
+      `${fieldName} must be one of: ${SUPPORTED_COOKIE_BROWSERS.join(", ")}.`
+    );
+  }
+
+  return value;
+}
+
+function validatePageCommandPayload(parsedBody: unknown): PageCommandPayload {
+  const body = requirePlainObject(parsedBody);
+  const url = requireNonEmptyString(body.url, "url");
+  const outputPath = requireNonEmptyString(body.outputPath, "outputPath");
+  const allowLocalhost =
+    body.allowLocalhost === undefined
+      ? false
+      : requireBoolean(body.allowLocalhost, "allowLocalhost");
+
+  return {
+    url,
+    outputPath,
+    allowLocalhost
+  };
+}
+
+function validateCookieImportPayload(parsedBody: unknown): CookieImportPayload {
+  const body = requirePlainObject(parsedBody);
+  const browser = requireSupportedCookieBrowser(body.browser, "browser");
+
+  if (!Array.isArray(body.domains)) {
+    throw new RequestValidationError("domains must be an array of strings.");
+  }
+
+  const normalizedDomains = [...new Set(
+    body.domains.map((domain) => {
+      if (typeof domain !== "string") {
+        throw new RequestValidationError("domains must be an array of strings.");
+      }
+      return domain.trim();
+    }).filter(Boolean)
+  )];
+
+  if (normalizedDomains.length === 0) {
+    throw new RequestValidationError("domains must contain at least one non-empty string.");
+  }
+
+  return {
+    browser,
+    domains: normalizedDomains
+  };
+}
+
+function validateAuthenticatedRoute(
+  route: Exclude<ClassifiedRoute, { kind: "health" | "not-found" }>,
+  parsedBody: unknown
+): ValidatedRoute {
+  if (route.kind === "page-screenshot" || route.kind === "page-snapshot") {
+    return {
+      kind: route.kind,
+      payload: validatePageCommandPayload(parsedBody)
+    };
+  }
+
+  if (route.kind === "cookies-domains") {
+    return {
+      kind: "cookies-domains",
+      browser: requireSupportedCookieBrowser(
+        route.browser,
+        "browser",
+        "browser query parameter is required."
+      )
+    };
+  }
+
+  return {
+    kind: "cookies-import",
+    payload: validateCookieImportPayload(parsedBody)
+  };
+}
+
 async function readJsonWithLimit<T>(request: IncomingMessage): Promise<T> {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
@@ -161,37 +302,40 @@ async function readJsonWithLimit<T>(request: IncomingMessage): Promise<T> {
 }
 
 async function dispatchAuthenticatedRoute(
-  route: Exclude<ClassifiedRoute, { kind: "health" | "not-found" }>,
-  parsedBody: unknown,
+  route: ValidatedRoute,
   handlers: BrowserServerHandlers
 ): Promise<DispatchResponse> {
   if (route.kind === "page-screenshot") {
     return {
       statusCode: 200,
-      body: await handlers.screenshot(parsedBody as PageCommandPayload)
+      body: await handlers.screenshot(route.payload)
     };
   }
 
   if (route.kind === "page-snapshot") {
     return {
       statusCode: 200,
-      body: await handlers.snapshot(parsedBody as PageCommandPayload)
+      body: await handlers.snapshot(route.payload)
     };
   }
 
   if (route.kind === "cookies-domains") {
-    if (!route.browser) {
-      return { statusCode: 400, body: { error: "browser query parameter is required." } };
-    }
     return {
       statusCode: 200,
-      body: { domains: handlers.listCookieDomains(route.browser as SupportedCookieBrowser) }
+      body: { domains: handlers.listCookieDomains(route.browser) }
+    };
+  }
+
+  if (route.kind === "cookies-import") {
+    return {
+      statusCode: 200,
+      body: await handlers.importCookies(route.payload)
     };
   }
 
   return {
-    statusCode: 200,
-    body: await handlers.importCookies(parsedBody as CookieImportPayload)
+    statusCode: 500,
+    body: { error: "Unknown authenticated route." }
   };
 }
 
@@ -216,24 +360,35 @@ export async function dispatchBrowserRequest(
   request: DispatchRequest,
   options: BrowserServerOptions
 ): Promise<DispatchResponse> {
-  const host = options.host ?? DEFAULT_HOST;
-  const route = classifyRoute(request.method, request.path, host, options.port);
+  try {
+    const host = options.host ?? DEFAULT_HOST;
+    const route = classifyRoute(request.method, request.path, host, options.port);
 
-  if (route.kind === "health") {
-    return { statusCode: 200, body: { ok: true, host } };
+    if (route.kind === "health") {
+      return { statusCode: 200, body: { ok: true, host } };
+    }
+
+    if (route.kind === "not-found") {
+      return { statusCode: 404, body: { error: "Not found." } };
+    }
+
+    const authFailure = authError(request.headers, options.token);
+    if (authFailure) {
+      return authFailure;
+    }
+
+    const parsedBody = route.requiresJsonBody ? parseJsonBody(request.body) : undefined;
+    const validatedRoute = validateAuthenticatedRoute(route, parsedBody);
+    return dispatchAuthenticatedRoute(validatedRoute, options.handlers);
+  } catch (error) {
+    if (error instanceof HttpBodyError) {
+      return { statusCode: error.statusCode, body: { error: error.message } };
+    }
+    if (error instanceof RequestValidationError) {
+      return { statusCode: 400, body: { error: error.message } };
+    }
+    throw error;
   }
-
-  if (route.kind === "not-found") {
-    return { statusCode: 404, body: { error: "Not found." } };
-  }
-
-  const authFailure = authError(request.headers, options.token);
-  if (authFailure) {
-    return authFailure;
-  }
-
-  const parsedBody = route.requiresJsonBody ? parseJsonBody(request.body) : undefined;
-  return dispatchAuthenticatedRoute(route, parsedBody, options.handlers);
 }
 
 export async function startBrowserServer(options: BrowserServerOptions): Promise<{
@@ -273,11 +428,16 @@ export async function startBrowserServer(options: BrowserServerOptions): Promise
       const parsedBody = route.requiresJsonBody
         ? await readJsonWithLimit<unknown>(request)
         : undefined;
-      const dispatchResponse = await dispatchAuthenticatedRoute(route, parsedBody, options.handlers);
+      const validatedRoute = validateAuthenticatedRoute(route, parsedBody);
+      const dispatchResponse = await dispatchAuthenticatedRoute(validatedRoute, options.handlers);
       writeJson(response, dispatchResponse.statusCode, dispatchResponse.body);
     } catch (error) {
       if (error instanceof HttpBodyError) {
         writeJson(response, error.statusCode, { error: error.message });
+        return;
+      }
+      if (error instanceof RequestValidationError) {
+        writeJson(response, 400, { error: error.message });
         return;
       }
       const message = error instanceof Error ? error.message : "Unknown error";
