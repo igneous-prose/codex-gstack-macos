@@ -7,9 +7,12 @@ import {
   applyCeoReview,
   applyDesignReview,
   applyEngReview,
+  buildQaContextSnapshot,
+  buildReviewContextSnapshot,
   buildWorkflowStatusSnapshot,
   ensureBrief,
   getWorkflowPaths,
+  persistWorkflowContextSnapshots,
   readLatestWorkflowState,
   recordRetro,
   runAutoplan,
@@ -92,6 +95,50 @@ function handleRouteCommand(args: string[]): void {
   });
 }
 
+function handleDispatchCommand(args: string[]): void {
+  const repoRoot = readTargetRepo(args);
+  const input = requireInput(args);
+  const decision = classifyWorkflowIntent(input);
+  const workflowStatus = buildWorkflowStatusSnapshot(repoRoot);
+  const suggestedCommand =
+    decision.route === "direct"
+      ? null
+      : getWorkflowWrapperPath(`gstack-workflow-${decision.route}`);
+  const routerStateBase = {
+    route: decision.route,
+    suggestedSkill: decision.suggestedSkill,
+    suggestedCommand,
+    requiresConfirmation: decision.requiresConfirmation,
+    reason: decision.reason,
+    updatedAt: new Date().toISOString()
+  };
+  const routerState: RouterStateRecord =
+    workflowStatus.initiativeId === null
+      ? routerStateBase
+      : {
+          ...routerStateBase,
+          initiativeId: workflowStatus.initiativeId
+        };
+  writeRouterState(repoRoot, routerState);
+
+  printJson({
+    route: decision.route,
+    reason: decision.reason,
+    requiresConfirmation: decision.requiresConfirmation,
+    confirmationMessage: buildRouteConfirmationMessage(decision),
+    suggestedSkill: decision.suggestedSkill,
+    suggestedCommand,
+    activeInitiative: {
+      initiativeId: workflowStatus.initiativeId,
+      title: workflowStatus.title,
+      status: workflowStatus.status,
+      planPath: workflowStatus.planPath
+    },
+    suggestedNpmScript:
+      decision.route === "direct" ? null : `npm run workflow:${decision.route} -- --repo ${repoRoot}`
+  });
+}
+
 function handleOfficeHoursCommand(args: string[]): void {
   const repoRoot = readTargetRepo(args);
   const input = requireInput(args);
@@ -100,7 +147,8 @@ function handleOfficeHoursCommand(args: string[]): void {
   printJson({
     initiativeId: result.initiativeId,
     title: result.title,
-    briefPath: result.briefPath
+    briefPath: result.briefPath,
+    officeHoursMode: result.officeHoursMode
   });
 }
 
@@ -125,7 +173,9 @@ function handleAutoplanCommand(args: string[]): void {
     title: result.title,
     planPath: result.planPath,
     reviewSequence: result.reviewSequence,
-    implementNextMessage: result.implementNextMessage
+    implementNextMessage: result.implementNextMessage,
+    ceoScopeMode: result.ceoScopeMode,
+    unresolvedTasteDecisions: result.unresolvedTasteDecisions
   });
 }
 
@@ -179,6 +229,7 @@ function handlePlanReviewCommand(
     briefPath: getWorkflowPaths(repoRoot, initiativeId).briefPath,
     planPath: getWorkflowPaths(repoRoot, initiativeId).planPath,
     reviewSequence: executedReviewSequence,
+    officeHoursMode: briefResult.officeHoursMode,
     updatedAt: new Date().toISOString()
   });
 
@@ -225,6 +276,20 @@ function handleStatusCommand(args: string[]): void {
   printJson(snapshot);
 }
 
+function handleReviewCommand(args: string[]): void {
+  const repoRoot = readTargetRepo(args);
+  const reviewContext = buildReviewContextSnapshot(repoRoot);
+  persistWorkflowContextSnapshots(repoRoot, { reviewContext });
+  printJson(reviewContext);
+}
+
+function handleQaCommand(args: string[]): void {
+  const repoRoot = readTargetRepo(args);
+  const qaContext = buildQaContextSnapshot(repoRoot);
+  persistWorkflowContextSnapshots(repoRoot, { qaContext });
+  printJson(qaContext);
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0];
@@ -236,6 +301,9 @@ async function main(): Promise<void> {
   switch (command) {
     case "route":
       handleRouteCommand(args);
+      break;
+    case "dispatch":
+      handleDispatchCommand(args);
       break;
     case "office-hours":
       handleOfficeHoursCommand(args);
@@ -257,6 +325,12 @@ async function main(): Promise<void> {
       break;
     case "status":
       handleStatusCommand(args);
+      break;
+    case "review":
+      handleReviewCommand(args);
+      break;
+    case "qa":
+      handleQaCommand(args);
       break;
     default:
       throw new Error(`Unknown workflow command: ${command}`);

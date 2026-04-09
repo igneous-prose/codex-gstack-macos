@@ -30,11 +30,11 @@ describe("workflow cli", () => {
     }
   });
 
-  it("routes requests and persists router state", () => {
+  it("dispatches requests and persists router state", () => {
     const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-route-"));
     tempDirs.push(targetRepo);
 
-    const result = runWorkflowScript("workflow:route", [
+    const result = runWorkflowScript("workflow:dispatch", [
       "--repo",
       targetRepo,
       "--input",
@@ -44,6 +44,12 @@ describe("workflow cli", () => {
     expect(result.route).toBe("autoplan");
     expect(result.requiresConfirmation).toBe(true);
     expect(String(result.suggestedCommand)).toContain("gstack-workflow-autoplan");
+    expect(result.activeInitiative).toEqual({
+      initiativeId: null,
+      title: null,
+      status: null,
+      planPath: null
+    });
     expect(readFileSync(path.join(targetRepo, ".codex-gstack", "workflow", "router-state.json"), "utf8")).toContain(
       "\"route\": \"autoplan\""
     );
@@ -60,6 +66,11 @@ describe("workflow cli", () => {
       "I want to build a daily briefing app for support leads"
     ]);
     expect(String(officeHours.briefPath)).toContain("docs/gstack/");
+    expect(officeHours.officeHoursMode).toBe("builder");
+    const briefMarkdown = readFileSync(String(officeHours.briefPath), "utf8");
+    expect(briefMarkdown).toContain("## Office Hours Mode");
+    expect(briefMarkdown).toContain("## Premise Challenge");
+    expect(briefMarkdown).toContain("## Implementation Alternatives");
 
     const status = runWorkflowScript("workflow:status", ["--repo", targetRepo]);
     expect(status.status).toBe("briefed");
@@ -95,6 +106,11 @@ describe("workflow cli", () => {
     expect(planMarkdown).toContain("## Design Review");
     expect(planMarkdown).toContain("## Engineering Review");
     expect(planMarkdown).toContain("## Acceptance Criteria");
+    expect(planMarkdown).toContain("## QA Targets");
+    expect(planMarkdown).toContain("Scope mode:");
+    expect(planMarkdown).toContain("### Scorecard");
+    expect(planMarkdown).toContain("### Architecture");
+    expect(Array.isArray(autoplan.unresolvedTasteDecisions)).toBe(true);
   });
 
   it("lets independent plan reviews update targeted sections", () => {
@@ -125,8 +141,51 @@ describe("workflow cli", () => {
     const planMarkdown = readFileSync(path.join(targetRepo, "docs", "gstack", initiativeId, "plan.md"), "utf8");
     expect(planMarkdown).toContain("## CEO Review");
     expect(planMarkdown).toContain("## Engineering Review");
-    expect(planMarkdown).toContain("Reframe the initiative");
+    expect(planMarkdown).toContain("Product reframe");
     expect(planMarkdown).toContain("architecture");
+  });
+
+  it("returns review and QA context from the active plan", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-review-qa-"));
+    tempDirs.push(targetRepo);
+
+    const officeHours = runWorkflowScript("workflow:office-hours", [
+      "--repo",
+      targetRepo,
+      "--input",
+      "I want to build a customer dashboard for support leads"
+    ]);
+    const initiativeId = String(officeHours.initiativeId);
+    runWorkflowScript("workflow:autoplan", ["--repo", targetRepo, "--initiative-id", initiativeId]);
+
+    const reviewContext = runWorkflowScript("workflow:review", ["--repo", targetRepo]);
+    expect(String(reviewContext.planPath)).toContain(
+      path.join("docs", "gstack", initiativeId, "plan.md")
+    );
+    expect(reviewContext.fallbackMessage).toBeNull();
+    expect(reviewContext.implementationChecklist).toContain(
+      "Read the brief and current repo shape before editing."
+    );
+
+    const qaContext = runWorkflowScript("workflow:qa", ["--repo", targetRepo]);
+    expect(String(qaContext.planPath)).toContain(
+      path.join("docs", "gstack", initiativeId, "plan.md")
+    );
+    expect(qaContext.fallbackMessage).toBeNull();
+    expect(qaContext.qaTargets).not.toHaveLength(0);
+  });
+
+  it("falls back cleanly when review or QA runs without a plan", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-review-fallback-"));
+    tempDirs.push(targetRepo);
+
+    const reviewContext = runWorkflowScript("workflow:review", ["--repo", targetRepo]);
+    expect(reviewContext.fallbackMessage).toBe("No active plan found. Fall back to branch-only review.");
+
+    const qaContext = runWorkflowScript("workflow:qa", ["--repo", targetRepo]);
+    expect(qaContext.fallbackMessage).toBe(
+      "No active plan found. Fall back to installation and branch-only QA."
+    );
   });
 
   it("writes retro learnings and reuses them in the next brief", () => {

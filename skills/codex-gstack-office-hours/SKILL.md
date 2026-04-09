@@ -14,13 +14,19 @@ $HOME/.codex/gstack-macos/bin/gstack-workflow-office-hours --repo /path/to/targe
 2. Reframe the problem before talking about implementation.
 3. Extract users, pain, wedge, constraints, and success criteria.
 4. Read project-local learnings from `.codex-gstack/workflow/learnings.json` when present.
-5. Create `docs/gstack/<initiative-id>/brief.md`.
-6. Update `.codex-gstack/workflow/latest.json` so downstream planning skills can pick up the latest brief.
+5. Pick `startup` or `builder` mode, then force the brief through reframe, premise challenge, alternatives, and recommendation sections.
+6. Create `docs/gstack/<initiative-id>/brief.md`.
+7. Update `.codex-gstack/workflow/latest.json` so downstream planning skills can pick up the latest brief.
 
 ## Required Brief Sections
 
+- Office Hours Mode
 - User Intent
-- Problem Framing
+- Reframe
+- Forcing Questions
+- Premise Challenge
+- Implementation Alternatives
+- Recommendation
 - Success Criteria
 - Constraints
 - Remembered Learnings

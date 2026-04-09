@@ -13,12 +13,35 @@ export const PLAN_SECTION_TITLES = [
   "Engineering Review",
   "Implementation Plan",
   "Acceptance Criteria",
+  "QA Targets",
   "Implement Next"
 ] as const;
 
 export type WorkflowArtifactKind = "brief" | "plan" | "retro";
 export type WorkflowStatus = "briefed" | "planned" | "retrospective";
 export type PlanSectionTitle = (typeof PLAN_SECTION_TITLES)[number];
+export type OfficeHoursMode = "startup" | "builder";
+export type CeaScopeMode = "expand" | "selective-expand" | "hold-scope" | "reduce";
+
+export interface ReviewContextSnapshot {
+  readonly generatedAt: string;
+  readonly initiativeId: string | null;
+  readonly title: string | null;
+  readonly planPath: string | null;
+  readonly implementationChecklist: string[];
+  readonly acceptanceCriteria: string[];
+  readonly fallbackMessage: string | null;
+}
+
+export interface QaContextSnapshot {
+  readonly generatedAt: string;
+  readonly initiativeId: string | null;
+  readonly title: string | null;
+  readonly planPath: string | null;
+  readonly qaTargets: string[];
+  readonly userFacingExpectations: string[];
+  readonly fallbackMessage: string | null;
+}
 
 export interface WorkflowPaths {
   readonly repoRoot: string;
@@ -43,6 +66,11 @@ export interface LatestWorkflowState {
   readonly planPath?: string;
   readonly retroPath?: string;
   readonly reviewSequence?: string[];
+  readonly officeHoursMode?: OfficeHoursMode;
+  readonly ceoScopeMode?: CeaScopeMode;
+  readonly unresolvedTasteDecisions?: string[];
+  readonly reviewContext?: ReviewContextSnapshot;
+  readonly qaContext?: QaContextSnapshot;
   readonly updatedAt: string;
 }
 
@@ -74,6 +102,7 @@ export interface OfficeHoursResult {
   readonly title: string;
   readonly briefPath: string;
   readonly briefMarkdown: string;
+  readonly officeHoursMode: OfficeHoursMode;
 }
 
 export interface AutoplanResult {
@@ -83,6 +112,8 @@ export interface AutoplanResult {
   readonly planMarkdown: string;
   readonly reviewSequence: string[];
   readonly implementNextMessage: string;
+  readonly ceoScopeMode: CeaScopeMode;
+  readonly unresolvedTasteDecisions: string[];
 }
 
 export interface RetroResult {
@@ -160,6 +191,8 @@ function getPlanSectionPlaceholder(sectionTitle: PlanSectionTitle): string {
       return "- Final implementation plan has not been assembled yet.";
     case "Acceptance Criteria":
       return "- Acceptance criteria have not been finalized yet.";
+    case "QA Targets":
+      return "- QA targets have not been finalized yet.";
     case "Implement Next":
       return "- Implement-next guidance has not been written yet.";
   }
@@ -167,6 +200,307 @@ function getPlanSectionPlaceholder(sectionTitle: PlanSectionTitle): string {
 
 function buildPlanSection(sectionTitle: PlanSectionTitle, body: string): string {
   return `## ${sectionTitle}\n\n${body.trim()}`;
+}
+
+function hasMatcher(input: string, patterns: readonly RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(input));
+}
+
+function cleanIntentLine(input: string): string {
+  return input.replace(/\s+/g, " ").trim();
+}
+
+function extractListItems(sectionBody: string | null): string[] {
+  if (!sectionBody) {
+    return [];
+  }
+
+  return sectionBody
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^(-|\d+\.)\s+/.test(line))
+    .map((line) => line.replace(/^(-|\d+\.)\s+/, "").trim())
+    .filter(Boolean);
+}
+
+function extractLatestPlanMarkdown(repoRoot: string): { latestState: LatestWorkflowState | null; planMarkdown: string | null } {
+  const latestState = readLatestWorkflowState(repoRoot);
+  if (!latestState?.planPath || !existsSync(latestState.planPath)) {
+    return {
+      latestState,
+      planMarkdown: null
+    };
+  }
+
+  return {
+    latestState,
+    planMarkdown: readFileSync(latestState.planPath, "utf8")
+  };
+}
+
+function selectOfficeHoursMode(userIntent: string): OfficeHoursMode {
+  const normalized = userIntent.toLowerCase();
+  if (
+    hasMatcher(normalized, [
+      /\bstartup\b/,
+      /\bfounder\b/,
+      /\bnew product\b/,
+      /\bgo to market\b/,
+      /\bbuyer\b/,
+      /\bpricing\b/,
+      /\bmarket\b/,
+      /\bcustomer\b/
+    ])
+  ) {
+    return "startup";
+  }
+
+  return "builder";
+}
+
+function buildModeRationale(mode: OfficeHoursMode): string {
+  if (mode === "startup") {
+    return "Use startup mode when the user is still proving demand, users, and wedge.";
+  }
+
+  return "Use builder mode when the user mostly needs product framing and execution shape.";
+}
+
+function buildModeQuestions(mode: OfficeHoursMode, title: string): string {
+  if (mode === "startup") {
+    return [
+      `1. Which specific user will switch behavior on day one if ${title} exists?`,
+      "2. What painful workflow is happening often enough that a narrow wedge matters now?",
+      "3. What evidence would prove this is a must-have instead of a nice-to-have?",
+      "4. What would the buyer, operator, or founder refuse to cut from the first release?",
+      "5. What can wait until after the first repeated success story?",
+      "6. What metric would make you double down within two weeks of shipping?"
+    ].join("\n");
+  }
+
+  return [
+    `1. What would make the first use of ${title} feel immediately magical?`,
+    "2. Which operator path must feel faster, clearer, or calmer than the current workflow?",
+    "3. Where will the user hesitate or mistrust the product unless the design is explicit?",
+    "4. Which system or human boundary creates the highest implementation risk?",
+    "5. What is the smallest release that still feels like a product, not a demo?",
+    "6. What should stay deliberately unfinished until real usage teaches something?"
+  ].join("\n");
+}
+
+function buildActualBuildStatement(title: string, mode: OfficeHoursMode): string {
+  if (mode === "startup") {
+    return `${title} is a narrow proof-of-demand product that should teach whether one user workflow is painful enough to earn repeat usage.`;
+  }
+
+  return `${title} is an execution-focused product wedge that should make one operator or end-user path meaningfully clearer, faster, or safer.`;
+}
+
+function buildPremiseChallenge(mode: OfficeHoursMode): string {
+  const challengeLines =
+    mode === "startup"
+      ? [
+          "Accept: the first release can optimize for learning over breadth if it earns repeat use.",
+          "Reject: building a platform, suite, or marketplace before one workflow proves sticky value.",
+          "Adjust: keep founder ambition, but force the first release to win one narrow buyer or operator story."
+        ]
+      : [
+          "Accept: the first release should feel polished on the primary path, not complete everywhere.",
+          "Reject: shipping every edge path before the main interaction feels trustworthy.",
+          "Adjust: reduce setup, copy, and branching until the user understands the wedge in one pass."
+        ];
+
+  return joinBullets(challengeLines);
+}
+
+function buildImplementationAlternatives(title: string, mode: OfficeHoursMode): string {
+  const alternatives =
+    mode === "startup"
+      ? [
+          {
+            name: "Pilot Wedge",
+            wedge: `Ship ${title} for one operator workflow and measure repeat usage.`,
+            effort: "Low",
+            risk: "May feel intentionally narrow, but learning is fast."
+          },
+          {
+            name: "Concierge Hybrid",
+            wedge: `Keep ${title} lightweight in product and fill gaps manually behind the scenes.`,
+            effort: "Medium",
+            risk: "Manual load stays high if the wedge is not tightened."
+          },
+          {
+            name: "Platform Leap",
+            wedge: `Attempt ${title} as a broad system from day one.`,
+            effort: "High",
+            risk: "High risk of breadth outrunning proof of value."
+          }
+        ]
+      : [
+          {
+            name: "Single-Path Product Slice",
+            wedge: `Implement one complete user path in ${title} with strong defaults and clear UX.`,
+            effort: "Low",
+            risk: "Secondary paths wait until after first release."
+          },
+          {
+            name: "Config-Heavy First Release",
+            wedge: `Expose more knobs in ${title} before the main flow feels obvious.`,
+            effort: "Medium",
+            risk: "Users may need too much interpretation on day one."
+          },
+          {
+            name: "Broad Coverage Pass",
+            wedge: `Cover most workflows in ${title} before the primary path feels excellent.`,
+            effort: "High",
+            risk: "High chance of generic UX and diluted quality bar."
+          }
+        ];
+
+  return alternatives
+    .map(
+      (alternative, index) =>
+        `### Option ${index + 1}: ${alternative.name}\n- Wedge: ${alternative.wedge}\n- Effort: ${alternative.effort}\n- Risk: ${alternative.risk}`
+    )
+    .join("\n\n");
+}
+
+function buildRecommendation(title: string, mode: OfficeHoursMode): string {
+  if (mode === "startup") {
+    return `Recommend the Pilot Wedge for ${title}. It keeps the first release narrow enough to learn quickly while still producing a concrete proof-of-value story.`;
+  }
+
+  return `Recommend the Single-Path Product Slice for ${title}. It is the narrowest release that can still feel intentional, trustworthy, and implementation-ready.`;
+}
+
+function selectCeoScopeMode(briefMarkdown: string): CeaScopeMode {
+  const normalized = briefMarkdown.toLowerCase();
+  if (hasMatcher(normalized, [/\bplatform\b/, /\bsuite\b/, /\bmarketplace\b/, /\ball-in-one\b/, /\beverything\b/])) {
+    return "reduce";
+  }
+
+  if (hasMatcher(normalized, [/\bpilot\b/, /\bmvp\b/, /\bsingle path\b/, /\bnarrow\b/, /\bwedge\b/])) {
+    return "selective-expand";
+  }
+
+  if (hasMatcher(normalized, [/\blanding page\b/, /\bprototype\b/, /\bone screen\b/])) {
+    return "expand";
+  }
+
+  return "hold-scope";
+}
+
+function buildCeoApprovalGate(scopeMode: CeaScopeMode): string {
+  switch (scopeMode) {
+    case "reduce":
+      return "Reduce scope before implementation if new work expands beyond the first useful workflow.";
+    case "selective-expand":
+      return "Allow only selective expansion that reinforces the first successful workflow.";
+    case "expand":
+      return "Expand only if the current wedge is too small to feel like a real product.";
+    case "hold-scope":
+      return "Hold scope steady unless new evidence shows the first path is underspecified.";
+  }
+}
+
+function buildDesignScores(title: string): string[] {
+  return [
+    `Clarity: 4/5 for ${title} if the first screen makes the wedge obvious immediately.`,
+    "Focus: 5/5 when the primary path is simpler than the surrounding system.",
+    "Quality bar: 4/5 if copy, layout, and defaults avoid generic AI-product sludge."
+  ];
+}
+
+function buildUnresolvedTasteDecisions(title: string): string[] {
+  return [
+    `Decide whether ${title} should open with a dense operator workspace or a guided summary view.`,
+    "Decide how assertive the primary CTA should be relative to secondary diagnostics.",
+    "Decide which secondary controls stay hidden until the main path is clearly understood."
+  ];
+}
+
+function buildReviewContextFromPlan(repoRoot: string): ReviewContextSnapshot {
+  const generatedAt = new Date().toISOString();
+  const { latestState, planMarkdown } = extractLatestPlanMarkdown(repoRoot);
+  if (!latestState?.initiativeId || !latestState.planPath || !planMarkdown) {
+    return {
+      generatedAt,
+      initiativeId: latestState?.initiativeId ?? null,
+      title: latestState?.title ?? null,
+      planPath: latestState?.planPath ?? null,
+      implementationChecklist: [],
+      acceptanceCriteria: [],
+      fallbackMessage: "No active plan found. Fall back to branch-only review."
+    };
+  }
+
+  return {
+    generatedAt,
+    initiativeId: latestState.initiativeId,
+    title: latestState.title,
+    planPath: latestState.planPath,
+    implementationChecklist: extractListItems(readPlanSection(planMarkdown, "Implementation Plan")),
+    acceptanceCriteria: extractListItems(readPlanSection(planMarkdown, "Acceptance Criteria")),
+    fallbackMessage: null
+  };
+}
+
+function buildQaContextFromPlan(repoRoot: string): QaContextSnapshot {
+  const generatedAt = new Date().toISOString();
+  const { latestState, planMarkdown } = extractLatestPlanMarkdown(repoRoot);
+  if (!latestState?.initiativeId || !latestState.planPath || !planMarkdown) {
+    return {
+      generatedAt,
+      initiativeId: latestState?.initiativeId ?? null,
+      title: latestState?.title ?? null,
+      planPath: latestState?.planPath ?? null,
+      qaTargets: [],
+      userFacingExpectations: [],
+      fallbackMessage: "No active plan found. Fall back to installation and branch-only QA."
+    };
+  }
+
+  const qaTargets = extractListItems(readPlanSection(planMarkdown, "QA Targets"));
+  const acceptanceCriteria = extractListItems(readPlanSection(planMarkdown, "Acceptance Criteria"));
+
+  return {
+    generatedAt,
+    initiativeId: latestState.initiativeId,
+    title: latestState.title,
+    planPath: latestState.planPath,
+    qaTargets,
+    userFacingExpectations: acceptanceCriteria.slice(0, 3),
+    fallbackMessage: null
+  };
+}
+
+export function buildReviewContextSnapshot(repoRoot: string): ReviewContextSnapshot {
+  return buildReviewContextFromPlan(repoRoot);
+}
+
+export function buildQaContextSnapshot(repoRoot: string): QaContextSnapshot {
+  return buildQaContextFromPlan(repoRoot);
+}
+
+export function persistWorkflowContextSnapshots(
+  repoRoot: string,
+  contexts: {
+    readonly reviewContext?: ReviewContextSnapshot;
+    readonly qaContext?: QaContextSnapshot;
+  }
+): LatestWorkflowState | null {
+  const latestState = readLatestWorkflowState(repoRoot);
+  if (!latestState) {
+    return null;
+  }
+
+  const nextState: LatestWorkflowState = {
+    ...latestState,
+    ...contexts,
+    updatedAt: new Date().toISOString()
+  };
+  writeLatestWorkflowState(repoRoot, nextState);
+  return nextState;
 }
 
 export function slugify(value: string): string {
@@ -352,6 +686,7 @@ export function renderBriefMarkdown(options: {
   readonly title: string;
   readonly userIntent: string;
   readonly rememberedLearnings: readonly ProjectLearning[];
+  readonly officeHoursMode: OfficeHoursMode;
 }): string {
   const learningBlock =
     options.rememberedLearnings.length === 0
@@ -360,22 +695,49 @@ export function renderBriefMarkdown(options: {
           .slice(-5)
           .map((learning) => `- ${learning.pattern}: ${learning.guidance}`)
           .join("\n");
+  const normalizedIntent = cleanIntentLine(options.userIntent);
 
   return `# Brief: ${options.title}
 
 - Initiative ID: \`${options.initiativeId}\`
 - Workflow stage: \`office-hours\`
 - Output path: \`docs/gstack/${options.initiativeId}/brief.md\`
+- Selected mode: \`${options.officeHoursMode}\`
+
+## Office Hours Mode
+
+- Mode: \`${options.officeHoursMode}\`
+- Guidance: ${buildModeRationale(options.officeHoursMode)}
 
 ## User Intent
 
-${options.userIntent}
+${normalizedIntent}
 
-## Problem Framing
+## Reframe
 
-- Core problem: clarify the real pain behind the request.
-- Users: identify the main operator, buyer, or end user.
-- Wedge: define the smallest useful version worth shipping first.
+### What You Said
+
+${normalizedIntent}
+
+### What You Are Actually Building
+
+${buildActualBuildStatement(options.title, options.officeHoursMode)}
+
+## Forcing Questions
+
+${buildModeQuestions(options.officeHoursMode, options.title)}
+
+## Premise Challenge
+
+${buildPremiseChallenge(options.officeHoursMode)}
+
+## Implementation Alternatives
+
+${buildImplementationAlternatives(options.title, options.officeHoursMode)}
+
+## Recommendation
+
+${buildRecommendation(options.title, options.officeHoursMode)}
 
 ## Success Criteria
 
@@ -439,8 +801,7 @@ export function initializePlanDocument(
 
 export function readPlanSection(planMarkdown: string, sectionTitle: PlanSectionTitle): string | null {
   const pattern = new RegExp(
-    `## ${escapeRegExp(sectionTitle)}\\n\\n([\\s\\S]*?)(?=\\n## |$)`,
-    "m"
+    `## ${escapeRegExp(sectionTitle)}\\n\\n([\\s\\S]*?)(?=\\n## [^\\n]+\\n\\n|\\s*$)`
   );
   const match = planMarkdown.match(pattern);
   return match?.[1]?.trim() ?? null;
@@ -453,8 +814,7 @@ export function updatePlanSection(
 ): string {
   const replacement = buildPlanSection(sectionTitle, body.trim());
   const pattern = new RegExp(
-    `## ${escapeRegExp(sectionTitle)}\\n\\n[\\s\\S]*?(?=\\n## |$)`,
-    "m"
+    `## ${escapeRegExp(sectionTitle)}\\n\\n[\\s\\S]*?(?=\\n## [^\\n]+\\n\\n|\\s*$)`
   );
 
   if (pattern.test(planMarkdown)) {
@@ -506,7 +866,10 @@ export function ensureBrief(
       initiativeId: options.initiativeId,
       title,
       briefPath: getWorkflowPaths(repoRoot, options.initiativeId).briefPath,
-      briefMarkdown
+      briefMarkdown,
+      officeHoursMode: latestState?.initiativeId === options.initiativeId
+        ? latestState.officeHoursMode ?? selectOfficeHoursMode(briefMarkdown)
+        : selectOfficeHoursMode(briefMarkdown)
     };
   }
 
@@ -517,7 +880,8 @@ export function ensureBrief(
         initiativeId: latestState.initiativeId,
         title: latestState.title,
         briefPath: latestState.briefPath,
-        briefMarkdown
+        briefMarkdown,
+        officeHoursMode: latestState.officeHoursMode ?? selectOfficeHoursMode(briefMarkdown)
       };
     }
   }
@@ -530,7 +894,7 @@ export function ensureBrief(
 }
 
 export function buildBriefSnapshot(briefMarkdown: string): string {
-  return briefMarkdown.split("\n").slice(0, 12).join("\n");
+  return briefMarkdown.split("\n").slice(0, 20).join("\n");
 }
 
 export function applyBriefSnapshotSection(
@@ -563,10 +927,13 @@ export function applyCeoReview(
   }
 ): string {
   let planMarkdown = initializePlanDocument(repoRoot, options);
+  const scopeMode = selectCeoScopeMode(options.briefMarkdown);
   const ceoBody = joinBullets([
-    `Reframe the initiative as: ${options.title}.`,
-    "Protect the smallest wedge that teaches something real before broader expansion.",
-    "Remove work that does not affect the first useful operator or customer path."
+    `Scope mode: \`${scopeMode}\`.`,
+    `Product reframe: ${options.title} should win one narrow workflow before adding adjacent breadth.`,
+    "Accepted premise: the first release must teach something real about repeat usage or operator value.",
+    "Accepted premise: remove work that does not change the first useful path.",
+    `Approval gate: ${buildCeoApprovalGate(scopeMode)}`
   ]);
   planMarkdown = updatePlanSection(planMarkdown, "CEO Review", ceoBody);
   planMarkdown = updateExecutedReviewSequence(planMarkdown, options.executedReviewSequence);
@@ -586,11 +953,20 @@ export function applyDesignReview(
 ): string {
   let planMarkdown = initializePlanDocument(repoRoot, options);
   const designBody = options.includeDesignReview
-    ? joinBullets([
-        `Define what a polished first version of ${options.title} should feel like.`,
-        "Call out visible UX assumptions, interaction clarity, and anti-slop quality bars.",
-        "Require explicit user-facing acceptance criteria before implementation starts."
-      ])
+    ? [
+        "### Scorecard",
+        joinBullets(buildDesignScores(options.title)),
+        "",
+        "### Unresolved Taste Decisions",
+        joinBullets(buildUnresolvedTasteDecisions(options.title)),
+        "",
+        "### User-Facing Expectations",
+        joinBullets([
+          `The first screen for ${options.title} should explain the wedge in one glance.`,
+          "Primary actions should be obvious before secondary diagnostics or settings.",
+          "Copy, defaults, and visual hierarchy should avoid generic AI-product styling."
+        ])
+      ].join("\n")
     : "- Design review skipped because this initiative is not user-facing.";
   planMarkdown = updatePlanSection(planMarkdown, "Design Review", designBody);
   planMarkdown = updateExecutedReviewSequence(planMarkdown, options.executedReviewSequence);
@@ -608,11 +984,37 @@ export function applyEngReview(
   }
 ): string {
   let planMarkdown = initializePlanDocument(repoRoot, options);
-  const engBody = joinBullets([
-    `Lock the architecture and data flow for ${options.title} before editing.`,
-    "Make failure modes, regression risks, and verification paths explicit.",
-    "Tie tests and acceptance criteria to the actual plan rather than improvised implementation."
-  ]);
+  const engBody = [
+    "### Architecture",
+    joinBullets([
+      `Lock the core architecture for ${options.title} before editing the repo.`,
+      "Identify the smallest module boundary that can deliver the wedge end to end."
+    ]),
+    "",
+    "### Data Flow",
+    joinBullets([
+      "Map input, state transitions, persistence, and user-visible output explicitly.",
+      "Call out any browser, filesystem, or repo-local boundary that cannot drift."
+    ]),
+    "",
+    "### Failure Modes",
+    joinBullets([
+      "List regressions, empty-state behavior, and partial-write failure cases.",
+      "Make fallback behavior explicit instead of silently masking state problems."
+    ]),
+    "",
+    "### Trust Boundaries",
+    joinBullets([
+      "Preserve local-only behavior and existing browser hardening.",
+      "Do not add remote control, tunnels, or cross-workspace leakage."
+    ]),
+    "",
+    "### Test Plan",
+    joinBullets([
+      "Add or update command-level workflow coverage.",
+      "Verify lint, test, and security checks against the persisted plan."
+    ])
+  ].join("\n");
   planMarkdown = updatePlanSection(planMarkdown, "Engineering Review", engBody);
   planMarkdown = updateExecutedReviewSequence(planMarkdown, options.executedReviewSequence);
   writeWorkflowArtifact(repoRoot, options.initiativeId, "plan", planMarkdown);
@@ -626,15 +1028,26 @@ export function finalizePlan(
     readonly title: string;
     readonly plannedReviewSequence: readonly string[];
     readonly executedReviewSequence: readonly string[];
+    readonly ceoScopeMode: CeaScopeMode;
+    readonly unresolvedTasteDecisions: readonly string[];
+    readonly includeDesignReview: boolean;
   }
 ): string {
   let planMarkdown = initializePlanDocument(repoRoot, options);
   planMarkdown = updatePlanSection(
     planMarkdown,
     "Implementation Plan",
-    `1. Read the brief and current repo shape before editing.
+    `### Chosen Implementation Approach
+
+- CEO scope mode: \`${options.ceoScopeMode}\`
+- Build the narrowest release that still feels like a real product wedge.
+- Keep the plan executable by one implementation thread without hidden dependency work.
+
+### Implementation Checklist
+
+1. Read the brief and current repo shape before editing.
 2. Implement the smallest end-to-end change that satisfies the wedge.
-3. Verify behavior with automated checks and any required manual QA.
+3. Keep review-stage artifacts and runtime state aligned as changes land.
 4. Run \`/review\` against the persisted plan, then \`/qa\` or browser verification as needed.
 5. Use \`/ship\` only after the plan and verification criteria are satisfied.`
   );
@@ -644,7 +1057,21 @@ export function finalizePlan(
     joinBullets([
       "The implementation follows this saved plan rather than improvised prompting.",
       "New behavior is covered by tests or an exact manual verification path.",
-      "Review and QA both reference the current plan artifact and its acceptance criteria."
+      "Review and QA both reference the current plan artifact and its acceptance criteria.",
+      options.includeDesignReview
+        ? "User-facing polish decisions are either resolved or explicitly called out as open."
+        : "Non-user-facing work preserves trusted internal boundaries and operational clarity."
+    ])
+  );
+  planMarkdown = updatePlanSection(
+    planMarkdown,
+    "QA Targets",
+    joinBullets([
+      "Validate the implementation against the saved acceptance criteria before fallback checks.",
+      "Confirm the implementation checklist was followed and the active plan path is still current.",
+      ...(options.unresolvedTasteDecisions.length === 0
+        ? ["No unresolved taste decisions remain from planning."]
+        : options.unresolvedTasteDecisions.map((decision) => `Open taste decision: ${decision}`))
     ])
   );
   planMarkdown = updatePlanSection(
@@ -665,11 +1092,13 @@ export function startOfficeHoursWorkflow(
   const title = inferInitiativeTitle(userIntent);
   const initiativeId = buildInitiativeId(title, now);
   const rememberedLearnings = readProjectLearnings(repoRoot);
+  const officeHoursMode = selectOfficeHoursMode(userIntent);
   const briefMarkdown = renderBriefMarkdown({
     initiativeId,
     title,
     userIntent,
-    rememberedLearnings
+    rememberedLearnings,
+    officeHoursMode
   });
   const briefPath = writeWorkflowArtifact(repoRoot, initiativeId, "brief", briefMarkdown);
 
@@ -678,7 +1107,9 @@ export function startOfficeHoursWorkflow(
     title,
     status: "briefed",
     briefPath,
+    officeHoursMode,
     reviewSequence: [],
+    unresolvedTasteDecisions: [],
     updatedAt: now.toISOString()
   });
 
@@ -686,7 +1117,8 @@ export function startOfficeHoursWorkflow(
     initiativeId,
     title,
     briefPath,
-    briefMarkdown
+    briefMarkdown,
+    officeHoursMode
   };
 }
 
@@ -704,6 +1136,10 @@ export function runAutoplan(
     `${options.userIntent ?? ""}\n${briefResult.briefMarkdown}`
   );
   const includeDesignReview = reviewSequence.includes("plan-design-review");
+  const ceoScopeMode = selectCeoScopeMode(briefResult.briefMarkdown);
+  const unresolvedTasteDecisions = includeDesignReview
+    ? buildUnresolvedTasteDecisions(briefResult.title)
+    : [];
   const commonOptions = {
     initiativeId: briefResult.initiativeId,
     title: briefResult.title,
@@ -743,7 +1179,10 @@ export function runAutoplan(
     initiativeId: briefResult.initiativeId,
     title: briefResult.title,
     plannedReviewSequence: reviewSequence,
-    executedReviewSequence
+    executedReviewSequence,
+    ceoScopeMode,
+    unresolvedTasteDecisions,
+    includeDesignReview
   });
   const planPath = getWorkflowPaths(repoRoot, briefResult.initiativeId).planPath;
 
@@ -754,6 +1193,9 @@ export function runAutoplan(
     briefPath: briefResult.briefPath,
     planPath,
     reviewSequence: executedReviewSequence,
+    officeHoursMode: briefResult.officeHoursMode,
+    ceoScopeMode,
+    unresolvedTasteDecisions,
     updatedAt: now.toISOString()
   });
 
@@ -763,7 +1205,9 @@ export function runAutoplan(
     planPath,
     planMarkdown,
     reviewSequence: executedReviewSequence,
-    implementNextMessage: buildImplementNextMessage(briefResult.initiativeId)
+    implementNextMessage: buildImplementNextMessage(briefResult.initiativeId),
+    ceoScopeMode,
+    unresolvedTasteDecisions
   };
 }
 
@@ -809,6 +1253,13 @@ export function recordRetro(
     planPath: getWorkflowPaths(repoRoot, initiativeId).planPath,
     retroPath,
     reviewSequence: latestState?.reviewSequence ?? [],
+    ...(latestState?.officeHoursMode
+      ? { officeHoursMode: latestState.officeHoursMode }
+      : {}),
+    ...(latestState?.ceoScopeMode ? { ceoScopeMode: latestState.ceoScopeMode } : {}),
+    unresolvedTasteDecisions: latestState?.unresolvedTasteDecisions ?? [],
+    ...(latestState?.reviewContext ? { reviewContext: latestState.reviewContext } : {}),
+    ...(latestState?.qaContext ? { qaContext: latestState.qaContext } : {}),
     updatedAt: now.toISOString()
   });
 

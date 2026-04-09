@@ -41,21 +41,21 @@ for skill_name in "${expected_skills[@]}"; do
   fi
 done
 
-grep -q "workflow:route" "$repo_root/package.json" || { echo "Missing workflow:route package script" >&2; exit 1; }
-grep -q "gstack-workflow-route" "$repo_root/skills/codex-gstack-router/SKILL.md" || {
-  echo "Router skill must reference the installed wrapper command" >&2
+grep -q "workflow:dispatch" "$repo_root/package.json" || { echo "Missing workflow:dispatch package script" >&2; exit 1; }
+grep -q "gstack-workflow-dispatch" "$repo_root/skills/codex-gstack-router/SKILL.md" || {
+  echo "Router skill must reference the installed dispatch wrapper command" >&2
   exit 1
 }
-grep -q "workflow-status" "$repo_root/skills/codex-gstack-review/SKILL.md" || {
-  echo "Review skill must reference workflow status" >&2
+grep -q "workflow-review" "$repo_root/skills/codex-gstack-review/SKILL.md" || {
+  echo "Review skill must reference the review wrapper" >&2
   exit 1
 }
 grep -q "plan.md" "$repo_root/skills/codex-gstack-review/SKILL.md" || {
   echo "Review skill must reference the current plan artifact" >&2
   exit 1
 }
-grep -q "workflow-status" "$repo_root/skills/codex-gstack-qa/SKILL.md" || {
-  echo "QA skill must reference workflow status" >&2
+grep -q "workflow-qa" "$repo_root/skills/codex-gstack-qa/SKILL.md" || {
+  echo "QA skill must reference the QA wrapper" >&2
   exit 1
 }
 grep -q "plan.md" "$repo_root/skills/codex-gstack-qa/SKILL.md" || {
@@ -69,8 +69,16 @@ if [[ -f "$target_repo/.codex-gstack/workflow/team-bootstrap.json" ]]; then
     echo "Missing codex-gstack AGENTS section" >&2
     exit 1
   }
-  grep -q "gstack-workflow-route" "$target_repo/AGENTS.md" || {
+  grep -q "gstack-workflow-dispatch" "$target_repo/AGENTS.md" || {
     echo "Bootstrapped AGENTS must reference the installed wrapper commands" >&2
+    exit 1
+  }
+  grep -q "gstack-workflow-review" "$target_repo/AGENTS.md" || {
+    echo "Bootstrapped AGENTS must reference the review wrapper command" >&2
+    exit 1
+  }
+  grep -q "gstack-workflow-qa" "$target_repo/AGENTS.md" || {
+    echo "Bootstrapped AGENTS must reference the QA wrapper command" >&2
     exit 1
   }
 fi

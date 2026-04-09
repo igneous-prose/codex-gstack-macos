@@ -5,7 +5,7 @@ Use this skill to route freeform Codex requests into the right gstack workflow s
 ## Command
 
 ```bash
-$HOME/.codex/gstack-macos/bin/gstack-workflow-route --repo /path/to/target-repo --input "<user request>"
+$HOME/.codex/gstack-macos/bin/gstack-workflow-dispatch --repo /path/to/target-repo --input "<user request>"
 ```
 
 ## Routing
@@ -21,6 +21,6 @@ $HOME/.codex/gstack-macos/bin/gstack-workflow-route --repo /path/to/target-repo 
 
 - Do not force simple direct execution work through the planning workflow
 - Ask for confirmation before launching a multi-step route such as `codex-gstack-autoplan`
-- Run the route command first, inspect the returned JSON, then invoke the suggested workflow command when it is not a direct task
+- Run the dispatch command first, inspect the returned JSON, then invoke the suggested workflow command when it is not a direct task
 - Read the latest workflow state from `.codex-gstack/workflow/latest.json` when present
 - Keep tracked workflow outputs under `docs/gstack/<initiative-id>/`

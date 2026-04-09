@@ -32,6 +32,7 @@ skills_root="${codex_root}/skills"
 install_root="${codex_root}/gstack-macos"
 bin_root="${install_root}/bin"
 wrapper_commands=(
+  dispatch
   route
   office-hours
   autoplan
@@ -40,6 +41,8 @@ wrapper_commands=(
   plan-eng-review
   retro
   status
+  review
+  qa
 )
 
 mkdir -p "$skills_root"

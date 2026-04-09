@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -13,6 +13,8 @@ import {
   applyCeoReview,
   applyEngReview,
   appendProjectLearnings,
+  buildQaContextSnapshot,
+  buildReviewContextSnapshot,
   buildInitiativeId,
   createPlanDocument,
   ensureWorkflowLayout,
@@ -117,6 +119,7 @@ describe("workflow artifacts", () => {
     expect(readPlanSection(withSequence, "Brief Snapshot")).toBe("Brief excerpt");
     expect(readPlanSection(withSequence, "CEO Review")).toBe("CEO review body");
     expect(withSequence).toContain("Executed review stages: `plan-ceo-review`");
+    expect(withSequence).toContain("## QA Targets");
 
     applyBriefSnapshotSection(targetRepo, {
       initiativeId,
@@ -139,7 +142,81 @@ describe("workflow artifacts", () => {
     });
 
     const persistedPlan = readFileSync(path.join(targetRepo, "docs", "gstack", initiativeId, "plan.md"), "utf8");
-    expect(readPlanSection(persistedPlan, "CEO Review")).toContain("Reframe the initiative");
+    expect(readPlanSection(persistedPlan, "CEO Review")).toContain("Product reframe");
     expect(readPlanSection(persistedPlan, "Engineering Review")).toContain("architecture");
+  });
+
+  it("builds review and QA context snapshots from the active plan", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-context-"));
+    tempDirs.push(targetRepo);
+
+    const initiativeId = "20260409-daily-briefing-app";
+    const planMarkdown = `# Plan: Daily Briefing App
+
+- Initiative ID: \`${initiativeId}\`
+- Workflow stage: \`autoplan\`
+- Planned review stages: \`plan-ceo-review -> plan-eng-review\`
+- Executed review stages: \`plan-ceo-review -> plan-eng-review\`
+- Output path: \`docs/gstack/${initiativeId}/plan.md\`
+
+## Brief Snapshot
+
+- Snapshot
+
+## CEO Review
+
+- Scope mode: \`hold-scope\`
+
+## Design Review
+
+- Design review skipped because this initiative is not user-facing.
+
+## Engineering Review
+
+- Architecture is locked.
+
+## Implementation Plan
+
+1. Read the brief and current repo shape before editing.
+2. Implement the smallest end-to-end change that satisfies the wedge.
+
+## Acceptance Criteria
+
+- Follow the saved plan.
+- Verify the implementation with tests.
+
+## QA Targets
+
+- Validate the implementation against the saved acceptance criteria before fallback checks.
+
+## Implement Next
+
+- Implement from the saved plan.`;
+
+    writeLatestWorkflowState(targetRepo, {
+      initiativeId,
+      title: "Daily Briefing App",
+      status: "planned",
+      briefPath: path.join(targetRepo, "docs", "gstack", initiativeId, "brief.md"),
+      planPath: path.join(targetRepo, "docs", "gstack", initiativeId, "plan.md"),
+      updatedAt: "2026-04-09T10:00:00.000Z"
+    });
+    ensureWorkflowLayout(targetRepo, initiativeId);
+    const planPath = path.join(targetRepo, "docs", "gstack", initiativeId, "plan.md");
+    writeFileSync(planPath, planMarkdown, "utf8");
+
+    const reviewContext = buildReviewContextSnapshot(targetRepo);
+    expect(reviewContext.fallbackMessage).toBeNull();
+    expect(reviewContext.planPath).toBe(planPath);
+    expect(reviewContext.implementationChecklist).toContain(
+      "Read the brief and current repo shape before editing."
+    );
+
+    const qaContext = buildQaContextSnapshot(targetRepo);
+    expect(qaContext.fallbackMessage).toBeNull();
+    expect(qaContext.planPath).toBe(planPath);
+    expect(qaContext.qaTargets).toContain(
+      "Validate the implementation against the saved acceptance criteria before fallback checks."
+    );
   });
 });

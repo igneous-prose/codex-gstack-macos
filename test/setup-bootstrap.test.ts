@@ -48,14 +48,16 @@ describe("setup and bootstrap", () => {
     ]);
 
     expect(existsSync(path.join(fakeHome, ".codex", "gstack-macos", "bin", "bootstrap-repo.sh"))).toBe(true);
-    expect(existsSync(path.join(fakeHome, ".codex", "gstack-macos", "bin", "gstack-workflow-route"))).toBe(true);
+    expect(existsSync(path.join(fakeHome, ".codex", "gstack-macos", "bin", "gstack-workflow-dispatch"))).toBe(true);
     expect(existsSync(path.join(fakeHome, ".codex", "gstack-macos", "bin", "gstack-workflow-status"))).toBe(true);
+    expect(existsSync(path.join(fakeHome, ".codex", "gstack-macos", "bin", "gstack-workflow-review"))).toBe(true);
+    expect(existsSync(path.join(fakeHome, ".codex", "gstack-macos", "bin", "gstack-workflow-qa"))).toBe(true);
     expect(
       readFileSync(path.join(fakeHome, ".codex", "gstack-macos", "CODEX_PROJECT_INSTRUCTIONS.md"), "utf8")
-    ).toContain("gstack-workflow-route");
+    ).toContain("gstack-workflow-dispatch");
     expect(
       readFileSync(path.join(fakeHome, ".codex", "gstack-macos", "install.json"), "utf8")
-    ).toContain("gstack-workflow-autoplan");
+    ).toContain("gstack-workflow-review");
   });
 
   it("bootstraps a repo with workflow docs, runtime metadata, and AGENTS routing", () => {
@@ -71,8 +73,9 @@ describe("setup and bootstrap", () => {
     );
 
     expect(readFileSync(path.join(targetRepo, "AGENTS.md"), "utf8")).toContain("codex-gstack-router");
-    expect(readFileSync(path.join(targetRepo, "AGENTS.md"), "utf8")).toContain("gstack-workflow-route");
-    expect(readFileSync(path.join(targetRepo, "AGENTS.md"), "utf8")).toContain("gstack-workflow-status");
+    expect(readFileSync(path.join(targetRepo, "AGENTS.md"), "utf8")).toContain("gstack-workflow-dispatch");
+    expect(readFileSync(path.join(targetRepo, "AGENTS.md"), "utf8")).toContain("gstack-workflow-review");
+    expect(readFileSync(path.join(targetRepo, "AGENTS.md"), "utf8")).toContain("gstack-workflow-qa");
     expect(readFileSync(path.join(targetRepo, "docs", "gstack", "README.md"), "utf8")).toContain(
       "brief.md"
     );
