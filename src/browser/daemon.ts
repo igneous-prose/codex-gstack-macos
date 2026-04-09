@@ -6,7 +6,13 @@ import {
   type RuntimePaths,
   resolveTargetRepo
 } from "./config.js";
-import { clearDaemonState, readDaemonState, type DaemonState, writeDaemonState } from "./state.js";
+import {
+  clearDaemonState,
+  readDaemonState,
+  type DaemonState,
+  type PersistedDaemonState,
+  writeDaemonState
+} from "./state.js";
 import { startBrowserServer } from "./server.js";
 
 export interface StartDaemonOptions {
@@ -58,7 +64,7 @@ export async function runDaemon(options: StartDaemonOptions): Promise<void> {
 
 export function getDaemonInfo(targetRepo: string): {
   readonly runtimePaths: RuntimePaths;
-  readonly daemonState: DaemonState | null;
+  readonly daemonState: PersistedDaemonState | null;
 } {
   const resolvedRepo = resolveTargetRepo(targetRepo);
   const runtimePaths = ensureRuntimePaths(resolvedRepo);

@@ -9,6 +9,14 @@ export interface DaemonState {
   readonly startedAt: string;
 }
 
+export interface LegacyDaemonState extends DaemonState {
+  readonly host: string;
+  readonly port: number;
+  readonly token: string;
+}
+
+export type PersistedDaemonState = DaemonState | LegacyDaemonState;
+
 export interface PublicDaemonState extends DaemonState {
   readonly host: string;
   readonly port: number;
@@ -16,7 +24,18 @@ export interface PublicDaemonState extends DaemonState {
   readonly tokenRedacted: boolean;
 }
 
-export function redactDaemonState(state: DaemonState): PublicDaemonState {
+export function isLegacyDaemonState(state: PersistedDaemonState): state is LegacyDaemonState {
+  return (
+    "host" in state &&
+    typeof state.host === "string" &&
+    "port" in state &&
+    typeof state.port === "number" &&
+    "token" in state &&
+    typeof state.token === "string"
+  );
+}
+
+export function redactDaemonState(state: PersistedDaemonState): PublicDaemonState {
   const connection = getDaemonConnection(state.targetRepo);
   return {
     pid: state.pid,
@@ -37,9 +56,9 @@ export function writeDaemonState(runtimePaths: RuntimePaths, state: DaemonState)
   chmodSync(runtimePaths.daemonStateFile, PRIVATE_FILE_MODE);
 }
 
-export function readDaemonState(runtimePaths: RuntimePaths): DaemonState | null {
+export function readDaemonState(runtimePaths: RuntimePaths): PersistedDaemonState | null {
   try {
-    return JSON.parse(readFileSync(runtimePaths.daemonStateFile, "utf8")) as DaemonState;
+    return JSON.parse(readFileSync(runtimePaths.daemonStateFile, "utf8")) as PersistedDaemonState;
   } catch {
     return null;
   }

@@ -12,7 +12,13 @@ import {
   type SupportedCookieBrowser
 } from "./config.js";
 import { getDaemonInfo } from "./daemon.js";
-import { clearDaemonState, isProcessAlive, redactDaemonState, type DaemonState } from "./state.js";
+import {
+  clearDaemonState,
+  isLegacyDaemonState,
+  isProcessAlive,
+  redactDaemonState,
+  type PersistedDaemonState
+} from "./state.js";
 
 function getRepoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -74,22 +80,63 @@ export function openDaemonLogFile(logFilePath: string): number {
 }
 
 export function buildDaemonStatusPayload(
-  daemonState: DaemonState | null,
+  daemonState: PersistedDaemonState | null,
   isRunning: boolean
 ): Record<string, unknown> {
+  const legacyRunningDaemon =
+    daemonState && isRunning && isLegacyDaemonState(daemonState) ? daemonState : null;
   return {
-    status: isRunning ? "running" : "stopped",
+    status: legacyRunningDaemon ? "restart-required" : isRunning ? "running" : "stopped",
     daemonState: daemonState ? redactDaemonState(daemonState) : null,
     ...(daemonState
       ? {
           tokenHint: "Run `npm run browser:token -- --repo <target-repo>` to reveal the bearer token."
         }
+      : {}),
+    ...(legacyRunningDaemon
+      ? {
+          restartRequired: true,
+          message: buildLegacyDaemonUpgradeMessage(legacyRunningDaemon.targetRepo)
+        }
       : {})
   };
 }
 
-export function buildDaemonTokenPayload(daemonState: DaemonState): Record<string, unknown> {
+export function buildLegacyDaemonUpgradeMessage(targetRepo: string): string {
+  return `Browser daemon was started by an older version. Run \`npm run browser:stop -- --repo ${targetRepo}\` and then \`npm run browser:start -- --repo ${targetRepo}\`.`;
+}
+
+export function assertNoDeprecatedDaemonStartFlags(args: string[]): void {
+  if (args.includes("--port") || args.includes("--token")) {
+    throw new Error(
+      "Custom daemon connection flags are no longer supported. Stop the daemon and restart without --port or --token."
+    );
+  }
+}
+
+export function shouldRestartRunningDaemon(
+  daemonState: PersistedDaemonState | null,
+  isRunning: boolean
+): boolean {
+  return Boolean(daemonState && isRunning && isLegacyDaemonState(daemonState));
+}
+
+export function buildDaemonTokenPayload(daemonState: PersistedDaemonState): Record<string, unknown> {
+  if (isLegacyDaemonState(daemonState)) {
+    throw new Error(buildLegacyDaemonUpgradeMessage(daemonState.targetRepo));
+  }
   return { token: getDaemonConnection(daemonState.targetRepo).token };
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("Timed out waiting for the existing daemon to stop.");
 }
 
 async function waitForHealth(host: string, port: number): Promise<void> {
@@ -117,6 +164,9 @@ async function callDaemon(
   if (!daemonState || !isProcessAlive(daemonState.pid)) {
     throw new Error("Browser daemon is not running. Start it with `npm run browser:start`.");
   }
+  if (isLegacyDaemonState(daemonState)) {
+    throw new Error(buildLegacyDaemonUpgradeMessage(targetRepo));
+  }
   const connection = getDaemonConnection(targetRepo);
 
   const response = await fetch(`http://${connection.host}:${connection.port}${routePath}`, {
@@ -139,8 +189,16 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
   const targetRepo = resolveTargetRepo(readOption(args, "--repo"));
 
   if (subcommand === "start") {
+    assertNoDeprecatedDaemonStartFlags(args);
     const { runtimePaths, daemonState } = getDaemonInfo(targetRepo);
-    if (daemonState && isProcessAlive(daemonState.pid)) {
+    const isRunning = daemonState ? isProcessAlive(daemonState.pid) : false;
+    const legacyRunningDaemon =
+      daemonState && isRunning && isLegacyDaemonState(daemonState) ? daemonState : null;
+    if (legacyRunningDaemon) {
+      process.kill(legacyRunningDaemon.pid, "SIGTERM");
+      await waitForProcessExit(legacyRunningDaemon.pid);
+      clearDaemonState(runtimePaths);
+    } else if (daemonState && isRunning) {
       console.log(JSON.stringify(buildDaemonStatusPayload(daemonState, true), null, 2));
       return;
     }

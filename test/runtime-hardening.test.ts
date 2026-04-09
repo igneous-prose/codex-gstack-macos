@@ -54,16 +54,24 @@ import {
   getDaemonConnection
 } from "../src/browser/config.js";
 import {
+  assertNoDeprecatedDaemonStartFlags,
+  buildLegacyDaemonUpgradeMessage,
   buildPageCommandRequest,
   buildDaemonStatusPayload,
   buildDaemonTokenPayload,
-  openDaemonLogFile
+  openDaemonLogFile,
+  shouldRestartRunningDaemon
 } from "../src/browser/cli.js";
 import {
   SECURITY_BINARY,
   SQLITE3_BINARY
 } from "../src/browser/chromium-cookies.js";
-import { redactDaemonState, writeDaemonState } from "../src/browser/state.js";
+import {
+  isLegacyDaemonState,
+  readDaemonState,
+  redactDaemonState,
+  writeDaemonState
+} from "../src/browser/state.js";
 import { BrowserRuntime, validatePageUrl } from "../src/browser/runtime.js";
 
 describe("runtime hardening", () => {
@@ -180,6 +188,38 @@ describe("runtime hardening", () => {
     expect(persistedState).not.toHaveProperty("token");
   });
 
+  it("detects legacy daemon state written by older versions", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-legacy-state-"));
+    tempDirs.push(targetRepo);
+
+    const runtimePaths = ensureRuntimePaths(targetRepo);
+    writeFileSync(
+      runtimePaths.daemonStateFile,
+      `${JSON.stringify({
+        pid: 123,
+        host: "127.0.0.1",
+        port: 47770,
+        token: "legacy-token",
+        targetRepo,
+        startedAt: "2026-04-09T10:00:00.000Z"
+      })}\n`,
+      {
+        encoding: "utf8",
+        mode: PRIVATE_FILE_MODE
+      }
+    );
+
+    const daemonState = readDaemonState(runtimePaths);
+
+    expect(daemonState).not.toBeNull();
+    expect(isLegacyDaemonState(daemonState!)).toBe(true);
+    expect(daemonState).toMatchObject({
+      pid: 123,
+      targetRepo,
+      startedAt: "2026-04-09T10:00:00.000Z"
+    });
+  });
+
   it("redacts daemon state for normal output", () => {
     const connection = getDaemonConnection("/tmp/repo");
 
@@ -217,6 +257,40 @@ describe("runtime hardening", () => {
     expect(tokenPayload).toEqual({ token: connection.token });
   });
 
+  it("requires a restart before revealing a legacy daemon token", () => {
+    const legacyState = {
+      pid: 123,
+      host: "127.0.0.1",
+      port: 47770,
+      token: "legacy-token",
+      targetRepo: "/tmp/repo",
+      startedAt: "2026-04-09T10:00:00.000Z"
+    };
+
+    expect(() => buildDaemonTokenPayload(legacyState)).toThrow(
+      buildLegacyDaemonUpgradeMessage("/tmp/repo")
+    );
+  });
+
+  it("marks running legacy daemons as restart-required", () => {
+    const legacyState = {
+      pid: 123,
+      host: "127.0.0.1",
+      port: 47770,
+      token: "legacy-token",
+      targetRepo: "/tmp/repo",
+      startedAt: "2026-04-09T10:00:00.000Z"
+    };
+
+    expect(buildDaemonStatusPayload(legacyState, true)).toMatchObject({
+      status: "restart-required",
+      restartRequired: true,
+      message: buildLegacyDaemonUpgradeMessage("/tmp/repo")
+    });
+    expect(shouldRestartRunningDaemon(legacyState, true)).toBe(true);
+    expect(shouldRestartRunningDaemon(legacyState, false)).toBe(false);
+  });
+
   it("derives a stable per-repo daemon connection without persisting it", () => {
     const first = getDaemonConnection("/tmp/repo");
     const second = getDaemonConnection("/tmp/repo");
@@ -229,6 +303,16 @@ describe("runtime hardening", () => {
     expect(first.token).toMatch(/^[a-f0-9]{64}$/);
     expect(different.port).not.toBe(first.port);
     expect(different.token).not.toBe(first.token);
+  });
+
+  it("rejects deprecated daemon start flags", () => {
+    expect(() => assertNoDeprecatedDaemonStartFlags(["daemon", "start"])).not.toThrow();
+    expect(() => assertNoDeprecatedDaemonStartFlags(["daemon", "start", "--port", "47770"])).toThrow(
+      /no longer supported/
+    );
+    expect(() => assertNoDeprecatedDaemonStartFlags(["daemon", "start", "--token", "secret"])).toThrow(
+      /no longer supported/
+    );
   });
 
   it("allows only http and https page URLs", async () => {
