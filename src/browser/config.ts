@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_PORT = 47770;
+export const DAEMON_PORT_RANGE = 16_384;
 export const PRIVATE_DIRECTORY_MODE = 0o700;
 export const PRIVATE_FILE_MODE = 0o600;
 
@@ -23,6 +25,12 @@ export interface RuntimePaths {
   readonly logsDir: string;
   readonly daemonStateFile: string;
   readonly daemonLogFile: string;
+}
+
+export interface DaemonConnection {
+  readonly host: string;
+  readonly port: number;
+  readonly token: string;
 }
 
 export function resolveTargetRepo(inputPath?: string): string {
@@ -56,6 +64,15 @@ export function ensureRuntimePaths(repoRoot: string): RuntimePaths {
   chmodSync(runtimePaths.browserDir, PRIVATE_DIRECTORY_MODE);
   chmodSync(runtimePaths.logsDir, PRIVATE_DIRECTORY_MODE);
   return runtimePaths;
+}
+
+export function getDaemonConnection(targetRepo: string): DaemonConnection {
+  const digest = createHash("sha256").update(targetRepo).digest();
+  return {
+    host: DEFAULT_HOST,
+    port: DEFAULT_PORT + (digest.readUInt16BE(0) % DAEMON_PORT_RANGE),
+    token: digest.toString("hex")
+  };
 }
 
 export function assertMacosArm64(): void {

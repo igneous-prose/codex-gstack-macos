@@ -1,10 +1,8 @@
-import { createHash, randomBytes } from "node:crypto";
-
 import { BrowserRuntime } from "./runtime.js";
 import {
   DEFAULT_HOST,
-  DEFAULT_PORT,
   ensureRuntimePaths,
+  getDaemonConnection,
   type RuntimePaths,
   resolveTargetRepo
 } from "./config.js";
@@ -13,16 +11,6 @@ import { startBrowserServer } from "./server.js";
 
 export interface StartDaemonOptions {
   readonly targetRepo: string;
-  readonly port: number;
-  readonly token: string;
-}
-
-export function makeToken(): string {
-  return randomBytes(24).toString("hex");
-}
-
-export function makeDeterministicToken(seed: string): string {
-  return createHash("sha256").update(seed).digest("hex");
 }
 
 export function coerceAllowLocalhost(value: unknown): boolean {
@@ -32,12 +20,13 @@ export function coerceAllowLocalhost(value: unknown): boolean {
 export async function runDaemon(options: StartDaemonOptions): Promise<void> {
   const targetRepo = resolveTargetRepo(options.targetRepo);
   const runtimePaths = ensureRuntimePaths(targetRepo);
+  const connection = getDaemonConnection(targetRepo);
 
   const runtime = new BrowserRuntime(targetRepo);
   const serverInfo = await startBrowserServer({
     host: DEFAULT_HOST,
-    port: options.port,
-    token: options.token,
+    port: connection.port,
+    token: connection.token,
     handlers: {
       screenshot: async (payload) =>
         runtime.screenshot(payload.url, payload.outputPath, coerceAllowLocalhost(payload.allowLocalhost)),
@@ -50,9 +39,6 @@ export async function runDaemon(options: StartDaemonOptions): Promise<void> {
 
   const daemonState: DaemonState = {
     pid: process.pid,
-    host: serverInfo.host,
-    port: serverInfo.port,
-    token: options.token,
     targetRepo,
     startedAt: new Date().toISOString()
   };
@@ -81,5 +67,3 @@ export function getDaemonInfo(targetRepo: string): {
     daemonState: readDaemonState(runtimePaths)
   };
 }
-
-export const DEFAULT_DAEMON_PORT = DEFAULT_PORT;

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -46,9 +46,12 @@ vi.mock("playwright", () => ({
 }));
 
 import {
+  DAEMON_PORT_RANGE,
+  DEFAULT_PORT,
   PRIVATE_DIRECTORY_MODE,
   PRIVATE_FILE_MODE,
-  ensureRuntimePaths
+  ensureRuntimePaths,
+  getDaemonConnection
 } from "../src/browser/config.js";
 import {
   buildPageCommandRequest,
@@ -140,9 +143,6 @@ describe("runtime hardening", () => {
     const runtimePaths = ensureRuntimePaths(targetRepo);
     writeDaemonState(runtimePaths, {
       pid: process.pid,
-      host: "127.0.0.1",
-      port: 47770,
-      token: "secret-token",
       targetRepo,
       startedAt: "2026-04-09T10:00:00.000Z"
     });
@@ -156,20 +156,43 @@ describe("runtime hardening", () => {
     expect(statSync(runtimePaths.daemonLogFile).mode & 0o777).toBe(PRIVATE_FILE_MODE);
   });
 
+  it("persists only minimal daemon state to disk", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-state-"));
+    tempDirs.push(targetRepo);
+
+    const runtimePaths = ensureRuntimePaths(targetRepo);
+    writeDaemonState(runtimePaths, {
+      pid: 123,
+      targetRepo,
+      startedAt: "2026-04-09T10:00:00.000Z"
+    });
+
+    const persistedState = JSON.parse(readFileSync(runtimePaths.daemonStateFile, "utf8")) as
+      Record<string, unknown>;
+
+    expect(persistedState).toEqual({
+      pid: 123,
+      targetRepo,
+      startedAt: "2026-04-09T10:00:00.000Z"
+    });
+    expect(persistedState).not.toHaveProperty("host");
+    expect(persistedState).not.toHaveProperty("port");
+    expect(persistedState).not.toHaveProperty("token");
+  });
+
   it("redacts daemon state for normal output", () => {
+    const connection = getDaemonConnection("/tmp/repo");
+
     expect(
       redactDaemonState({
         pid: 123,
-        host: "127.0.0.1",
-        port: 47770,
-        token: "secret-token",
         targetRepo: "/tmp/repo",
         startedAt: "2026-04-09T10:00:00.000Z"
       })
     ).toEqual({
       pid: 123,
-      host: "127.0.0.1",
-      port: 47770,
+      host: connection.host,
+      port: connection.port,
       targetRepo: "/tmp/repo",
       startedAt: "2026-04-09T10:00:00.000Z",
       token: "[redacted]",
@@ -180,20 +203,32 @@ describe("runtime hardening", () => {
   it("requires the explicit daemon token command to reveal the token", () => {
     const daemonState = {
       pid: process.pid,
-      host: "127.0.0.1",
-      port: 47770,
-      token: "secret-token",
       targetRepo: "/tmp/repo",
       startedAt: "2026-04-09T10:00:00.000Z"
     };
+    const connection = getDaemonConnection(daemonState.targetRepo);
 
     const statusPayload = buildDaemonStatusPayload(daemonState, true);
     const tokenPayload = buildDaemonTokenPayload(daemonState);
 
     expect(JSON.stringify(statusPayload)).toContain('"token":"[redacted]"');
-    expect(JSON.stringify(statusPayload)).not.toContain("secret-token");
+    expect(JSON.stringify(statusPayload)).not.toContain(connection.token);
     expect(statusPayload).toHaveProperty("tokenHint");
-    expect(tokenPayload).toEqual({ token: "secret-token" });
+    expect(tokenPayload).toEqual({ token: connection.token });
+  });
+
+  it("derives a stable per-repo daemon connection without persisting it", () => {
+    const first = getDaemonConnection("/tmp/repo");
+    const second = getDaemonConnection("/tmp/repo");
+    const different = getDaemonConnection("/tmp/other-repo");
+
+    expect(first).toEqual(second);
+    expect(first.host).toBe("127.0.0.1");
+    expect(first.port).toBeGreaterThanOrEqual(DEFAULT_PORT);
+    expect(first.port).toBeLessThan(DEFAULT_PORT + DAEMON_PORT_RANGE);
+    expect(first.token).toMatch(/^[a-f0-9]{64}$/);
+    expect(different.port).not.toBe(first.port);
+    expect(different.token).not.toBe(first.token);
   });
 
   it("allows only http and https page URLs", async () => {

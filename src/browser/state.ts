@@ -1,27 +1,27 @@
 import { chmodSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 
-import { PRIVATE_FILE_MODE } from "./config.js";
+import { getDaemonConnection, PRIVATE_FILE_MODE } from "./config.js";
 import { type RuntimePaths } from "./config.js";
 
 export interface DaemonState {
   readonly pid: number;
-  readonly host: string;
-  readonly port: number;
-  readonly token: string;
   readonly targetRepo: string;
   readonly startedAt: string;
 }
 
-export interface PublicDaemonState extends Omit<DaemonState, "token"> {
+export interface PublicDaemonState extends DaemonState {
+  readonly host: string;
+  readonly port: number;
   readonly token: string;
   readonly tokenRedacted: boolean;
 }
 
 export function redactDaemonState(state: DaemonState): PublicDaemonState {
+  const connection = getDaemonConnection(state.targetRepo);
   return {
     pid: state.pid,
-    host: state.host,
-    port: state.port,
+    host: connection.host,
+    port: connection.port,
     targetRepo: state.targetRepo,
     startedAt: state.startedAt,
     token: "[redacted]",

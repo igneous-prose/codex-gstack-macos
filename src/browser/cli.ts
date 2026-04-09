@@ -4,9 +4,14 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { listCookieDomains } from "./chromium-cookies.js";
-import { PRIVATE_FILE_MODE, type SupportedCookieBrowser } from "./config.js";
-import { DEFAULT_DAEMON_PORT, getDaemonInfo, makeToken } from "./daemon.js";
-import { ensureRuntimePaths, resolveTargetRepo } from "./config.js";
+import {
+  ensureRuntimePaths,
+  getDaemonConnection,
+  PRIVATE_FILE_MODE,
+  resolveTargetRepo,
+  type SupportedCookieBrowser
+} from "./config.js";
+import { getDaemonInfo } from "./daemon.js";
 import { clearDaemonState, isProcessAlive, redactDaemonState, type DaemonState } from "./state.js";
 
 function getRepoRoot(): string {
@@ -84,7 +89,7 @@ export function buildDaemonStatusPayload(
 }
 
 export function buildDaemonTokenPayload(daemonState: DaemonState): Record<string, unknown> {
-  return { token: daemonState.token };
+  return { token: getDaemonConnection(daemonState.targetRepo).token };
 }
 
 async function waitForHealth(host: string, port: number): Promise<void> {
@@ -112,11 +117,12 @@ async function callDaemon(
   if (!daemonState || !isProcessAlive(daemonState.pid)) {
     throw new Error("Browser daemon is not running. Start it with `npm run browser:start`.");
   }
+  const connection = getDaemonConnection(targetRepo);
 
-  const response = await fetch(`http://${daemonState.host}:${daemonState.port}${routePath}`, {
+  const response = await fetch(`http://${connection.host}:${connection.port}${routePath}`, {
     ...init,
     headers: {
-      authorization: `Bearer ${daemonState.token}`,
+      authorization: `Bearer ${connection.token}`,
       "content-type": "application/json",
       ...(init.headers ?? {})
     }
@@ -140,15 +146,14 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
     }
 
     clearDaemonState(runtimePaths);
+    const connection = getDaemonConnection(targetRepo);
 
-    const port = Number.parseInt(readOption(args, "--port") ?? `${DEFAULT_DAEMON_PORT}`, 10);
-    const token = readOption(args, "--token") ?? makeToken();
     const repoRoot = getRepoRoot();
     const tsxCliPath = path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
     const logFd = openDaemonLogFile(runtimePaths.daemonLogFile);
     const child = spawn(
       process.execPath,
-      [tsxCliPath, path.join(repoRoot, "src/browser/daemon-entry.ts"), "--repo", targetRepo, "--port", `${port}`, "--token", token],
+      [tsxCliPath, path.join(repoRoot, "src/browser/daemon-entry.ts"), "--repo", targetRepo],
       {
         cwd: repoRoot,
         detached: true,
@@ -156,7 +161,7 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
       }
     );
     child.unref();
-    await waitForHealth("127.0.0.1", port);
+    await waitForHealth(connection.host, connection.port);
     const currentState = getDaemonInfo(targetRepo).daemonState;
     console.log(JSON.stringify(buildDaemonStatusPayload(currentState, true), null, 2));
     return;

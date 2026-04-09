@@ -5,6 +5,7 @@ The browser daemon is local-only.
 - bind host: `127.0.0.1`
 - auth: bearer token required for command routes
 - runtime state: `.codex-gstack/browser` and `.codex-gstack/logs`
+- persisted daemon state excludes the host, port, and bearer token; those values are derived from the target repo when needed
 - runtime permissions: owner-only for `.codex-gstack` directories and daemon state/log files
 - writes allowed only under the target repo and `/tmp`
 - command routes authenticate before JSON body parsing
