@@ -155,12 +155,16 @@ describe("runtime hardening", () => {
   it("rejects localhost and loopback by default but allows them with opt-in", () => {
     expect(() => validatePageUrl("http://localhost:3000", false)).toThrow(/--allow-localhost/);
     expect(() => validatePageUrl("http://localhost.:3000", false)).toThrow(/--allow-localhost/);
+    expect(() => validatePageUrl("http://foo.localhost:3000", false)).toThrow(/--allow-localhost/);
+    expect(() => validatePageUrl("http://foo.localhost.:3000", false)).toThrow(/--allow-localhost/);
     expect(() => validatePageUrl("http://127.0.0.1:3000", false)).toThrow(/--allow-localhost/);
     expect(() => validatePageUrl("http://[::1]:3000", false)).toThrow(/--allow-localhost/);
     expect(() => validatePageUrl("http://[::ffff:127.0.0.1]:3000", false)).toThrow(/--allow-localhost/);
 
     expect(validatePageUrl("http://localhost:3000", true)).toBe("http://localhost:3000/");
     expect(validatePageUrl("http://localhost.:3000", true)).toBe("http://localhost.:3000/");
+    expect(validatePageUrl("http://foo.localhost:3000", true)).toBe("http://foo.localhost:3000/");
+    expect(validatePageUrl("http://foo.localhost.:3000", true)).toBe("http://foo.localhost.:3000/");
     expect(validatePageUrl("http://127.0.0.1:3000", true)).toBe("http://127.0.0.1:3000/");
     expect(validatePageUrl("http://[::1]:3000", true)).toBe("http://[::1]:3000/");
     expect(validatePageUrl("http://[::ffff:127.0.0.1]:3000", true)).toBe("http://[::ffff:7f00:1]:3000/");

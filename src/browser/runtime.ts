@@ -75,7 +75,12 @@ function isBlockedPrivateIpv4(host: string): boolean {
 
 function isLocalhostHost(host: string): boolean {
   const normalizedHost = normalizeHostLiteral(host);
-  return normalizedHost === "localhost" || normalizedHost === "127.0.0.1" || normalizedHost === "::1";
+  return (
+    normalizedHost === "localhost" ||
+    normalizedHost.endsWith(".localhost") ||
+    normalizedHost === "127.0.0.1" ||
+    normalizedHost === "::1"
+  );
 }
 
 function firstIpv6Hextet(host: string): number | null {
