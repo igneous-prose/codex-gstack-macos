@@ -25,6 +25,10 @@ export function makeDeterministicToken(seed: string): string {
   return createHash("sha256").update(seed).digest("hex");
 }
 
+export function coerceAllowLocalhost(value: unknown): boolean {
+  return value === true;
+}
+
 export async function runDaemon(options: StartDaemonOptions): Promise<void> {
   const targetRepo = resolveTargetRepo(options.targetRepo);
   const runtimePaths = ensureRuntimePaths(targetRepo);
@@ -36,9 +40,9 @@ export async function runDaemon(options: StartDaemonOptions): Promise<void> {
     token: options.token,
     handlers: {
       screenshot: async (payload) =>
-        runtime.screenshot(payload.url, payload.outputPath, payload.allowLocalhost ?? false),
+        runtime.screenshot(payload.url, payload.outputPath, coerceAllowLocalhost(payload.allowLocalhost)),
       snapshot: async (payload) =>
-        runtime.snapshot(payload.url, payload.outputPath, payload.allowLocalhost ?? false),
+        runtime.snapshot(payload.url, payload.outputPath, coerceAllowLocalhost(payload.allowLocalhost)),
       listCookieDomains: (browser) => runtime.listCookieDomains(browser),
       importCookies: async ({ browser, domains }) => runtime.importCookies(browser, domains)
     }

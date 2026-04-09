@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_HOST } from "../src/browser/config.js";
+import { coerceAllowLocalhost } from "../src/browser/daemon.js";
 import { dispatchBrowserRequest } from "../src/browser/server.js";
 
 describe("daemon boundaries", () => {
@@ -69,5 +70,18 @@ describe("daemon boundaries", () => {
       outputPath: "/tmp/out.png",
       allowLocalhost: true
     });
+  });
+
+  it("only enables localhost access for a literal boolean true", () => {
+    expect(coerceAllowLocalhost(true)).toBe(true);
+    expect(coerceAllowLocalhost(false)).toBe(false);
+    expect(coerceAllowLocalhost(undefined)).toBe(false);
+    expect(coerceAllowLocalhost("true")).toBe(false);
+    expect(coerceAllowLocalhost("false")).toBe(false);
+    expect(coerceAllowLocalhost(1)).toBe(false);
+    expect(coerceAllowLocalhost(0)).toBe(false);
+    expect(coerceAllowLocalhost({})).toBe(false);
+    expect(coerceAllowLocalhost([])).toBe(false);
+    expect(coerceAllowLocalhost(null)).toBe(false);
   });
 });
