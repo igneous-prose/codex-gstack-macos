@@ -62,15 +62,7 @@ export async function runDaemon(options: StartDaemonOptions): Promise<void> {
   const shutdown = async (): Promise<void> => {
     clearDaemonState(runtimePaths);
     await runtime.close();
-    await new Promise<void>((resolve, reject) => {
-      serverInfo.server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
-    });
+    await serverInfo.close();
     process.exit(0);
   };
 
