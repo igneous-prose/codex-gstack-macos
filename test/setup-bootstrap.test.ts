@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -52,12 +52,19 @@ describe("setup and bootstrap", () => {
     expect(existsSync(path.join(fakeHome, ".codex", "gstack-macos", "bin", "gstack-workflow-status"))).toBe(true);
     expect(existsSync(path.join(fakeHome, ".codex", "gstack-macos", "bin", "gstack-workflow-review"))).toBe(true);
     expect(existsSync(path.join(fakeHome, ".codex", "gstack-macos", "bin", "gstack-workflow-qa"))).toBe(true);
+    expect(existsSync(path.join(fakeHome, ".codex", "gstack-macos", "bin", "gstack-workflow-ship"))).toBe(true);
     expect(
       readFileSync(path.join(fakeHome, ".codex", "gstack-macos", "CODEX_PROJECT_INSTRUCTIONS.md"), "utf8")
     ).toContain("gstack-workflow-dispatch");
     expect(
+      readFileSync(path.join(fakeHome, ".codex", "gstack-macos", "CODEX_PROJECT_INSTRUCTIONS.md"), "utf8")
+    ).toContain("gstack-workflow-ship");
+    expect(
       readFileSync(path.join(fakeHome, ".codex", "gstack-macos", "install.json"), "utf8")
     ).toContain("gstack-workflow-review");
+    expect(
+      readFileSync(path.join(fakeHome, ".codex", "gstack-macos", "install.json"), "utf8")
+    ).toContain("gstack-workflow-ship");
   });
 
   it("bootstraps a repo with workflow docs, runtime metadata, and AGENTS routing", () => {
@@ -76,12 +83,40 @@ describe("setup and bootstrap", () => {
     expect(readFileSync(path.join(targetRepo, "AGENTS.md"), "utf8")).toContain("gstack-workflow-dispatch");
     expect(readFileSync(path.join(targetRepo, "AGENTS.md"), "utf8")).toContain("gstack-workflow-review");
     expect(readFileSync(path.join(targetRepo, "AGENTS.md"), "utf8")).toContain("gstack-workflow-qa");
+    expect(readFileSync(path.join(targetRepo, "AGENTS.md"), "utf8")).toContain("gstack-workflow-ship");
     expect(readFileSync(path.join(targetRepo, "docs", "gstack", "README.md"), "utf8")).toContain(
       "brief.md"
     );
     expect(
       readFileSync(path.join(targetRepo, ".codex-gstack", "workflow", "team-bootstrap.json"), "utf8")
     ).toContain("\"mode\": \"required\"");
+
+    execFileSync("/bin/bash", [path.join(repoRoot, "scripts/doctor.sh"), targetRepo], {
+      cwd: repoRoot
+    });
+  });
+
+  it("accepts legacy bootstrapped repos that do not mention the ship wrapper in AGENTS", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-target-legacy-"));
+    tempDirs.push(targetRepo);
+
+    execFileSync(
+      "/bin/bash",
+      [path.join(repoRoot, "scripts/bootstrap-repo.sh"), "required", targetRepo],
+      {
+        cwd: repoRoot
+      }
+    );
+
+    const agentsPath = path.join(targetRepo, "AGENTS.md");
+    writeFileSync(
+      agentsPath,
+      readFileSync(agentsPath, "utf8").replace(
+        "Use `$HOME/.codex/gstack-macos/bin/gstack-workflow-ship --repo <target-repo>` before `codex-gstack-ship` so ship handoff sees the active plan context.\n",
+        ""
+      ),
+      "utf8"
+    );
 
     execFileSync("/bin/bash", [path.join(repoRoot, "scripts/doctor.sh"), targetRepo], {
       cwd: repoRoot

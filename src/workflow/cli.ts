@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -24,12 +25,51 @@ import {
   buildAutoplanReviewSequence,
   buildRouteConfirmationMessage,
   classifyWorkflowIntent,
-  requiresDesignReview
+  requiresDesignReview,
+  type WorkflowRouteKind
 } from "./router.js";
+
+const ROUTE_WORKFLOW_COMMANDS = {
+  "office-hours": "office-hours",
+  autoplan: "autoplan",
+  review: "review",
+  qa: "qa",
+  ship: "ship",
+  retro: "retro"
+} as const satisfies Record<Exclude<WorkflowRouteKind, "direct">, string>;
+
+const SHIP_CHECKLIST = [
+  "Run workflow review before shipping.",
+  "Run workflow QA before shipping.",
+  "Require green lint, typecheck, test, and security checks.",
+  "Keep main protected.",
+  "Prefer squash merge."
+] as const;
 
 function getWorkflowWrapperPath(command: string): string {
   const homeDir = process.env.HOME ?? "~";
   return path.join(homeDir, ".codex", "gstack-macos", "bin", command);
+}
+
+function resolveSuggestedCommand(route: WorkflowRouteKind): string | null {
+  if (route === "direct") {
+    return null;
+  }
+
+  const wrapperPath = getWorkflowWrapperPath(`gstack-workflow-${ROUTE_WORKFLOW_COMMANDS[route]}`);
+  if (route === "ship" && !existsSync(wrapperPath)) {
+    return null;
+  }
+
+  return wrapperPath;
+}
+
+function resolveSuggestedNpmScript(route: WorkflowRouteKind, repoRoot: string): string | null {
+  if (route === "direct") {
+    return null;
+  }
+
+  return `npm run workflow:${ROUTE_WORKFLOW_COMMANDS[route]} -- --repo ${repoRoot}`;
 }
 
 function requireInput(args: string[]): string {
@@ -69,10 +109,7 @@ function handleRouteCommand(args: string[]): void {
   const repoRoot = readTargetRepo(args);
   const input = requireInput(args);
   const decision = classifyWorkflowIntent(input);
-  const suggestedCommand =
-    decision.route === "direct"
-      ? null
-      : getWorkflowWrapperPath(`gstack-workflow-${decision.route}`);
+  const suggestedCommand = resolveSuggestedCommand(decision.route);
   const routerState: RouterStateRecord = {
     route: decision.route,
     suggestedSkill: decision.suggestedSkill,
@@ -90,8 +127,7 @@ function handleRouteCommand(args: string[]): void {
     confirmationMessage: buildRouteConfirmationMessage(decision),
     suggestedSkill: decision.suggestedSkill,
     suggestedCommand,
-    suggestedNpmScript:
-      decision.route === "direct" ? null : `npm run workflow:${decision.route} -- --repo ${repoRoot}`
+    suggestedNpmScript: resolveSuggestedNpmScript(decision.route, repoRoot)
   });
 }
 
@@ -100,10 +136,7 @@ function handleDispatchCommand(args: string[]): void {
   const input = requireInput(args);
   const decision = classifyWorkflowIntent(input);
   const workflowStatus = buildWorkflowStatusSnapshot(repoRoot);
-  const suggestedCommand =
-    decision.route === "direct"
-      ? null
-      : getWorkflowWrapperPath(`gstack-workflow-${decision.route}`);
+  const suggestedCommand = resolveSuggestedCommand(decision.route);
   const routerStateBase = {
     route: decision.route,
     suggestedSkill: decision.suggestedSkill,
@@ -134,8 +167,7 @@ function handleDispatchCommand(args: string[]): void {
       status: workflowStatus.status,
       planPath: workflowStatus.planPath
     },
-    suggestedNpmScript:
-      decision.route === "direct" ? null : `npm run workflow:${decision.route} -- --repo ${repoRoot}`
+    suggestedNpmScript: resolveSuggestedNpmScript(decision.route, repoRoot)
   });
 }
 
@@ -290,6 +322,24 @@ function handleQaCommand(args: string[]): void {
   printJson(qaContext);
 }
 
+function handleShipCommand(args: string[]): void {
+  const repoRoot = readTargetRepo(args);
+  const workflowStatus = buildWorkflowStatusSnapshot(repoRoot);
+
+  printJson({
+    initiativeId: workflowStatus.initiativeId,
+    title: workflowStatus.title,
+    status: workflowStatus.status,
+    planPath: workflowStatus.planPath,
+    suggestedSkill: "codex-gstack-ship",
+    fallbackMessage:
+      workflowStatus.planPath === null
+        ? "No active plan found. Fall back to the existing codex-gstack-ship skill handoff."
+        : null,
+    shipChecklist: [...SHIP_CHECKLIST]
+  });
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0];
@@ -331,6 +381,9 @@ async function main(): Promise<void> {
       break;
     case "qa":
       handleQaCommand(args);
+      break;
+    case "ship":
+      handleShipCommand(args);
       break;
     default:
       throw new Error(`Unknown workflow command: ${command}`);

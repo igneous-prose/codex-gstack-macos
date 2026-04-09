@@ -43,6 +43,7 @@ wrapper_commands=(
   status
   review
   qa
+  ship
 )
 
 mkdir -p "$skills_root"

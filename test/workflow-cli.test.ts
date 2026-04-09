@@ -8,13 +8,21 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-function runWorkflowScript(scriptName: string, args: string[]): Record<string, unknown> {
+function runWorkflowScript(
+  scriptName: string,
+  args: string[],
+  envOverrides?: NodeJS.ProcessEnv
+): Record<string, unknown> {
   const output = execFileSync(
     "npm",
     ["run", "--silent", scriptName, "--", ...args],
     {
       cwd: repoRoot,
-      encoding: "utf8"
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ...envOverrides
+      }
     }
   );
 
@@ -53,6 +61,32 @@ describe("workflow cli", () => {
     expect(readFileSync(path.join(targetRepo, ".codex-gstack", "workflow", "router-state.json"), "utf8")).toContain(
       "\"route\": \"autoplan\""
     );
+  });
+
+  it("dispatches ship requests to the installed ship wrapper", () => {
+    const fakeHome = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-home-"));
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-ship-route-"));
+    tempDirs.push(fakeHome, targetRepo);
+
+    execFileSync("/bin/bash", [path.join(repoRoot, "scripts", "setup.sh"), "--host", "codex"], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        HOME: fakeHome
+      }
+    });
+
+    const result = runWorkflowScript(
+      "workflow:dispatch",
+      ["--repo", targetRepo, "--input", "Open PR for this branch"],
+      { HOME: fakeHome }
+    );
+
+    expect(result.route).toBe("ship");
+    expect(result.suggestedSkill).toBe("codex-gstack-ship");
+    expect(String(result.suggestedCommand)).toContain("gstack-workflow-ship");
+    expect(String(result.suggestedNpmScript)).toContain("npm run workflow:ship -- --repo ");
+    expect(String(result.suggestedNpmScript)).toContain(path.basename(targetRepo));
   });
 
   it("writes a brief and reports current status", () => {
@@ -175,6 +209,34 @@ describe("workflow cli", () => {
     expect(qaContext.qaTargets).not.toHaveLength(0);
   });
 
+  it("returns ship handoff context from the active plan", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-ship-active-"));
+    tempDirs.push(targetRepo);
+
+    const officeHours = runWorkflowScript("workflow:office-hours", [
+      "--repo",
+      targetRepo,
+      "--input",
+      "I want to build a customer dashboard for support leads"
+    ]);
+    const initiativeId = String(officeHours.initiativeId);
+    runWorkflowScript("workflow:autoplan", ["--repo", targetRepo, "--initiative-id", initiativeId]);
+
+    const shipContext = runWorkflowScript("workflow:ship", ["--repo", targetRepo]);
+    expect(shipContext.initiativeId).toBe(initiativeId);
+    expect(shipContext.status).toBe("planned");
+    expect(String(shipContext.planPath)).toContain(path.join("docs", "gstack", initiativeId, "plan.md"));
+    expect(shipContext.suggestedSkill).toBe("codex-gstack-ship");
+    expect(shipContext.fallbackMessage).toBeNull();
+    expect(shipContext.shipChecklist).toEqual([
+      "Run workflow review before shipping.",
+      "Run workflow QA before shipping.",
+      "Require green lint, typecheck, test, and security checks.",
+      "Keep main protected.",
+      "Prefer squash merge."
+    ]);
+  });
+
   it("falls back cleanly when review or QA runs without a plan", () => {
     const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-review-fallback-"));
     tempDirs.push(targetRepo);
@@ -185,6 +247,13 @@ describe("workflow cli", () => {
     const qaContext = runWorkflowScript("workflow:qa", ["--repo", targetRepo]);
     expect(qaContext.fallbackMessage).toBe(
       "No active plan found. Fall back to installation and branch-only QA."
+    );
+
+    const shipContext = runWorkflowScript("workflow:ship", ["--repo", targetRepo]);
+    expect(shipContext.planPath).toBeNull();
+    expect(shipContext.suggestedSkill).toBe("codex-gstack-ship");
+    expect(shipContext.fallbackMessage).toBe(
+      "No active plan found. Fall back to the existing codex-gstack-ship skill handoff."
     );
   });
 

@@ -42,8 +42,13 @@ for skill_name in "${expected_skills[@]}"; do
 done
 
 grep -q "workflow:dispatch" "$repo_root/package.json" || { echo "Missing workflow:dispatch package script" >&2; exit 1; }
+grep -q "workflow:ship" "$repo_root/package.json" || { echo "Missing workflow:ship package script" >&2; exit 1; }
 grep -q "gstack-workflow-dispatch" "$repo_root/skills/codex-gstack-router/SKILL.md" || {
   echo "Router skill must reference the installed dispatch wrapper command" >&2
+  exit 1
+}
+grep -q "gstack-workflow-ship" "$repo_root/skills/codex-gstack-router/SKILL.md" || {
+  echo "Router skill must reference the installed ship wrapper command" >&2
   exit 1
 }
 grep -q "workflow-review" "$repo_root/skills/codex-gstack-review/SKILL.md" || {
