@@ -64,18 +64,29 @@ export function readDaemonPortOption(args: string[]): number | undefined {
   return parsedPort;
 }
 
-export function parseDaemonProcessMetadata(commandLine: string): DaemonProcessMetadata | null {
-  const repoHashMatch = commandLine.match(/(?:^|\s)--repo-hash\s+([a-f0-9]{64})(?=\s|$)/);
-  const portMatch = commandLine.match(/(?:^|\s)--port\s+([0-9]{1,5})(?=\s|$)/);
-  const nonceMatch = commandLine.match(/(?:^|\s)--nonce\s+([a-f0-9]{48})(?=\s|$)/);
+export function buildDaemonMetadataArgs(metadata: DaemonProcessMetadata): string[] {
+  return [
+    "--repo-hash",
+    metadata.repoHash,
+    "--port",
+    `${metadata.port}`,
+    "--nonce",
+    metadata.nonce
+  ];
+}
 
-  if (!repoHashMatch || !portMatch || !nonceMatch) {
+export function parseDaemonProcessMetadata(commandLine: string): DaemonProcessMetadata | null {
+  const metadataMatch = commandLine.match(
+    /(?:^|\s)--repo-hash\s+([a-f0-9]{64})\s+--port\s+([0-9]{1,5})\s+--nonce\s+([a-f0-9]{48})$/
+  );
+
+  if (!metadataMatch) {
     return null;
   }
 
-  const repoHash = repoHashMatch[1];
-  const portText = portMatch[1];
-  const nonce = nonceMatch[1];
+  const repoHash = metadataMatch[1];
+  const portText = metadataMatch[2];
+  const nonce = metadataMatch[3];
   if (!repoHash || !portText || !nonce) {
     return null;
   }
@@ -374,12 +385,7 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
         path.join(repoRoot, "src/browser/daemon-entry.ts"),
         "--repo",
         targetRepo,
-        "--repo-hash",
-        metadata.repoHash,
-        "--port",
-        `${metadata.port}`,
-        "--nonce",
-        metadata.nonce
+        ...buildDaemonMetadataArgs(metadata)
       ],
       {
         cwd: repoRoot,

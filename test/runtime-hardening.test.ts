@@ -57,6 +57,7 @@ import {
   assertStartPortOption,
   assertStatusPortOption,
   assertNoUnsupportedDaemonFlags,
+  buildDaemonMetadataArgs,
   buildDaemonCommand,
   buildDaemonNotRunningMessage,
   buildDaemonVerificationMessage,
@@ -322,18 +323,44 @@ describe("runtime hardening", () => {
   });
 
   it("parses daemon process metadata from marker arguments", () => {
+    const metadataArgs = buildDaemonMetadataArgs({
+      repoHash: "a".repeat(64),
+      port: 50123,
+      nonce: "b".repeat(48)
+    });
+
     expect(
       parseDaemonProcessMetadata(
-        "node cli.mjs src/browser/daemon-entry.ts --repo /tmp/repo --repo-hash " +
-          "a".repeat(64) +
-          " --port 50123 --nonce " +
-          "b".repeat(48)
+        `node cli.mjs src/browser/daemon-entry.ts --repo /tmp/repo ${metadataArgs.join(" ")}`
       )
     ).toEqual({
       repoHash: "a".repeat(64),
       port: 50123,
       nonce: "b".repeat(48)
     });
+    expect(
+      parseDaemonProcessMetadata(
+        "node cli.mjs src/browser/daemon-entry.ts --repo /tmp/--repo-hash " +
+          "c".repeat(64) +
+          " --port 12345 --nonce " +
+          "d".repeat(48) +
+          ` ${metadataArgs.join(" ")}`
+      )
+    ).toEqual({
+      repoHash: "a".repeat(64),
+      port: 50123,
+      nonce: "b".repeat(48)
+    });
+    expect(
+      parseDaemonProcessMetadata(
+        "node cli.mjs src/browser/daemon-entry.ts --repo /tmp/repo --repo-hash " + "a".repeat(64) + " --port 50123"
+      )
+    ).toBeNull();
+    expect(
+      parseDaemonProcessMetadata(
+        `node cli.mjs src/browser/daemon-entry.ts --repo /tmp/repo ${metadataArgs.join(" ")} --extra junk`
+      )
+    ).toBeNull();
     expect(parseDaemonProcessMetadata("node daemon-entry.ts --repo /tmp/repo")).toBeNull();
   });
 
