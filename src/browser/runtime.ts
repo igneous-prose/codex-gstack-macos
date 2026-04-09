@@ -7,6 +7,14 @@ import { type SupportedCookieBrowser } from "./config.js";
 import { importCookiesForDomains, listCookieDomains } from "./chromium-cookies.js";
 import { validateOutputPath } from "./path-policy.js";
 
+function normalizeHostLiteral(host: string): string {
+  const normalizedHost = host.trim().toLowerCase();
+  if (normalizedHost.startsWith("[") && normalizedHost.endsWith("]")) {
+    return normalizedHost.slice(1, -1);
+  }
+  return normalizedHost;
+}
+
 function isIpv4Address(host: string): boolean {
   const octets = host.split(".");
   if (octets.length !== 4) {
@@ -57,13 +65,40 @@ function isBlockedPrivateIpv4(host: string): boolean {
 }
 
 function isLocalhostHost(host: string): boolean {
-  const normalizedHost = host.trim().toLowerCase();
-  return (
-    normalizedHost === "localhost" ||
-    normalizedHost === "127.0.0.1" ||
-    normalizedHost === "::1" ||
-    normalizedHost === "[::1]"
-  );
+  const normalizedHost = normalizeHostLiteral(host);
+  return normalizedHost === "localhost" || normalizedHost === "127.0.0.1" || normalizedHost === "::1";
+}
+
+function parseMappedIpv4FromIpv6(host: string): string | null {
+  const normalizedHost = normalizeHostLiteral(host);
+  if (!normalizedHost.startsWith("::ffff:")) {
+    return null;
+  }
+
+  const suffix = normalizedHost.slice("::ffff:".length);
+  if (isIpv4Address(suffix)) {
+    return suffix;
+  }
+
+  const hexParts = suffix.split(":");
+  if (hexParts.length !== 2 || !hexParts.every((part) => /^[0-9a-f]{1,4}$/i.test(part))) {
+    return null;
+  }
+
+  const highPart = hexParts[0];
+  const lowPart = hexParts[1];
+  if (highPart === undefined || lowPart === undefined) {
+    return null;
+  }
+
+  const high = Number.parseInt(highPart, 16);
+  const low = Number.parseInt(lowPart, 16);
+  return [
+    (high >> 8) & 0xff,
+    high & 0xff,
+    (low >> 8) & 0xff,
+    low & 0xff
+  ].join(".");
 }
 
 function validatePageUrl(candidateUrl: string, allowLocalhost = false): string {
@@ -85,6 +120,20 @@ function validatePageUrl(candidateUrl: string, allowLocalhost = false): string {
       throw new Error("Localhost targets require --allow-localhost for local dev verification.");
     }
     return parsedUrl.toString();
+  }
+
+  const mappedIpv4 = parseMappedIpv4FromIpv6(host);
+  if (mappedIpv4) {
+    if (isLocalhostHost(mappedIpv4)) {
+      if (!allowLocalhost) {
+        throw new Error("Localhost targets require --allow-localhost for local dev verification.");
+      }
+      return parsedUrl.toString();
+    }
+
+    if (isBlockedPrivateIpv4(mappedIpv4)) {
+      throw new Error("Private and loopback IP targets are blocked.");
+    }
   }
 
   if (isBlockedPrivateIpv4(host)) {

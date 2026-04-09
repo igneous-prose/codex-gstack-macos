@@ -106,10 +106,12 @@ describe("runtime hardening", () => {
     expect(() => validatePageUrl("http://localhost:3000", false)).toThrow(/--allow-localhost/);
     expect(() => validatePageUrl("http://127.0.0.1:3000", false)).toThrow(/--allow-localhost/);
     expect(() => validatePageUrl("http://[::1]:3000", false)).toThrow(/--allow-localhost/);
+    expect(() => validatePageUrl("http://[::ffff:127.0.0.1]:3000", false)).toThrow(/--allow-localhost/);
 
     expect(validatePageUrl("http://localhost:3000", true)).toBe("http://localhost:3000/");
     expect(validatePageUrl("http://127.0.0.1:3000", true)).toBe("http://127.0.0.1:3000/");
     expect(validatePageUrl("http://[::1]:3000", true)).toBe("http://[::1]:3000/");
+    expect(validatePageUrl("http://[::ffff:127.0.0.1]:3000", true)).toBe("http://[::ffff:7f00:1]:3000/");
   });
 
   it("rejects literal private and link-local IPv4 targets", () => {
@@ -117,6 +119,10 @@ describe("runtime hardening", () => {
     expect(() => validatePageUrl("http://172.16.5.4:3000", false)).toThrow(/Private and loopback IP/);
     expect(() => validatePageUrl("http://192.168.1.20:3000", false)).toThrow(/Private and loopback IP/);
     expect(() => validatePageUrl("http://169.254.10.20:3000", false)).toThrow(/Private and loopback IP/);
+    expect(() => validatePageUrl("http://[::ffff:10.0.0.5]:3000", false)).toThrow(/Private and loopback IP/);
+    expect(() => validatePageUrl("http://[::ffff:172.16.5.4]:3000", false)).toThrow(/Private and loopback IP/);
+    expect(() => validatePageUrl("http://[::ffff:192.168.1.20]:3000", false)).toThrow(/Private and loopback IP/);
+    expect(() => validatePageUrl("http://[::ffff:169.254.10.20]:3000", false)).toThrow(/Private and loopback IP/);
   });
 
   it("parses --allow-localhost only on page commands", () => {
