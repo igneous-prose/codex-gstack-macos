@@ -1,17 +1,19 @@
-import { DEFAULT_DAEMON_PORT, makeToken, runDaemon } from "./daemon.js";
-
-function readOption(args: string[], name: string): string | undefined {
-  const index = args.indexOf(name);
-  if (index === -1) {
-    return undefined;
-  }
-  return args[index + 1];
-}
+import { readOptionValue } from "./argv.js";
+import { getDefaultDaemonPort, makeDaemonNonce } from "./config.js";
+import { runDaemon } from "./daemon.js";
 
 const args = process.argv.slice(2);
-const targetRepo = readOption(args, "--repo") ?? process.cwd();
-const port = Number.parseInt(readOption(args, "--port") ?? `${DEFAULT_DAEMON_PORT}`, 10);
-const token = readOption(args, "--token") ?? makeToken();
+const targetRepo = readOptionValue(args, "--repo") ?? process.cwd();
+const portOption = readOptionValue(args, "--port");
+const port = portOption ? Number.parseInt(portOption, 10) : getDefaultDaemonPort(targetRepo);
+const nonce = readOptionValue(args, "--nonce") ?? makeDaemonNonce();
+const repoHash = readOptionValue(args, "--repo-hash") ?? "";
 
-await runDaemon({ targetRepo, port, token });
-
+await runDaemon({
+  targetRepo,
+  metadata: {
+    repoHash,
+    port,
+    nonce
+  }
+});

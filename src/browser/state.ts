@@ -1,27 +1,65 @@
 import { chmodSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 
-import { PRIVATE_FILE_MODE } from "./config.js";
+import { DEFAULT_HOST, PRIVATE_FILE_MODE } from "./config.js";
 import { type RuntimePaths } from "./config.js";
 
 export interface DaemonState {
   readonly pid: number;
-  readonly host: string;
-  readonly port: number;
-  readonly token: string;
   readonly targetRepo: string;
   readonly startedAt: string;
 }
 
-export interface PublicDaemonState extends Omit<DaemonState, "token"> {
+export interface LegacyDaemonState extends DaemonState {
+  readonly host: string;
+  readonly port: number;
   readonly token: string;
-  readonly tokenRedacted: boolean;
 }
 
-export function redactDaemonState(state: DaemonState): PublicDaemonState {
+export type PersistedDaemonState = DaemonState | LegacyDaemonState;
+
+export interface PublicDaemonState extends DaemonState {
+  readonly host: string;
+  readonly port: number | null;
+  readonly token: string;
+  readonly tokenRedacted: boolean;
+  readonly connectionVerified: boolean;
+}
+
+export function isLegacyDaemonState(state: PersistedDaemonState): state is LegacyDaemonState {
+  return (
+    "host" in state &&
+    typeof state.host === "string" &&
+    "port" in state &&
+    typeof state.port === "number" &&
+    "token" in state &&
+    typeof state.token === "string"
+  );
+}
+
+export function redactDaemonState(
+  state: PersistedDaemonState,
+  connectionOverride?: {
+    readonly host: string;
+    readonly port: number;
+  }
+): PublicDaemonState {
+  const connection = connectionOverride
+    ? connectionOverride
+    : isLegacyDaemonState(state)
+      ? {
+          host: state.host,
+          port: state.port
+        }
+      : {
+          host: DEFAULT_HOST,
+          port: null
+        };
+  const connectionVerified = Boolean(connectionOverride) || isLegacyDaemonState(state);
   return {
     pid: state.pid,
-    host: state.host,
-    port: state.port,
+    connectionVerified,
+    host: connection.host,
+    port: connection.port,
     targetRepo: state.targetRepo,
     startedAt: state.startedAt,
     token: "[redacted]",
@@ -37,9 +75,9 @@ export function writeDaemonState(runtimePaths: RuntimePaths, state: DaemonState)
   chmodSync(runtimePaths.daemonStateFile, PRIVATE_FILE_MODE);
 }
 
-export function readDaemonState(runtimePaths: RuntimePaths): DaemonState | null {
+export function readDaemonState(runtimePaths: RuntimePaths): PersistedDaemonState | null {
   try {
-    return JSON.parse(readFileSync(runtimePaths.daemonStateFile, "utf8")) as DaemonState;
+    return JSON.parse(readFileSync(runtimePaths.daemonStateFile, "utf8")) as PersistedDaemonState;
   } catch {
     return null;
   }

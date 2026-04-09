@@ -1,37 +1,128 @@
 import { chmodSync, openSync } from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import { readMultiOptionValues, readOptionValue } from "./argv.js";
 import { listCookieDomains } from "./chromium-cookies.js";
-import { PRIVATE_FILE_MODE, type SupportedCookieBrowser } from "./config.js";
-import { DEFAULT_DAEMON_PORT, getDaemonInfo, makeToken } from "./daemon.js";
-import { ensureRuntimePaths, resolveTargetRepo } from "./config.js";
-import { clearDaemonState, isProcessAlive, redactDaemonState, type DaemonState } from "./state.js";
+import {
+  ensureRuntimePaths,
+  getDefaultDaemonPort,
+  getDaemonConnection,
+  hashTargetRepo,
+  makeDaemonNonce,
+  PRIVATE_FILE_MODE,
+  resolveTargetRepo,
+  type DaemonConnection,
+  type DaemonProcessMetadata,
+  type SupportedCookieBrowser
+} from "./config.js";
+import { getDaemonInfo } from "./daemon.js";
+import {
+  clearDaemonState,
+  isLegacyDaemonState,
+  isProcessAlive,
+  redactDaemonState,
+  type PersistedDaemonState
+} from "./state.js";
 
 function getRepoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 }
 
-function readOption(args: string[], name: string): string | undefined {
-  const index = args.indexOf(name);
-  return index === -1 ? undefined : args[index + 1];
-}
-
-function readMultiOption(args: string[], name: string): string[] {
-  const values: string[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const current = args[index];
-    const next = args[index + 1];
-    if (current === name && next) {
-      values.push(next);
-    }
-  }
-  return values;
-}
-
 function hasFlag(args: string[], name: string): boolean {
   return args.includes(name);
+}
+
+export function readDaemonPortOption(args: string[]): number | undefined {
+  const portOption = readOptionValue(args, "--port");
+  if (portOption === undefined) {
+    return undefined;
+  }
+
+  const parsedPort = Number.parseInt(portOption, 10);
+  if (!Number.isInteger(parsedPort) || `${parsedPort}` !== portOption || parsedPort < 1 || parsedPort > 65_535) {
+    throw new Error("--port must be an integer between 1 and 65535.");
+  }
+
+  return parsedPort;
+}
+
+export function buildDaemonMetadataArgs(metadata: DaemonProcessMetadata): string[] {
+  return [
+    "--repo-hash",
+    metadata.repoHash,
+    "--port",
+    `${metadata.port}`,
+    "--nonce",
+    metadata.nonce
+  ];
+}
+
+export function parseDaemonProcessMetadata(commandLine: string): DaemonProcessMetadata | null {
+  const metadataMatch = commandLine.match(
+    /(?:^|\s)--repo-hash\s+([a-f0-9]{64})\s+--port\s+([0-9]{1,5})\s+--nonce\s+([a-f0-9]{48})$/
+  );
+
+  if (!metadataMatch) {
+    return null;
+  }
+
+  const repoHash = metadataMatch[1];
+  const portText = metadataMatch[2];
+  const nonce = metadataMatch[3];
+  if (!repoHash || !portText || !nonce) {
+    return null;
+  }
+
+  const port = Number.parseInt(portText, 10);
+  if (port < 1 || port > 65_535) {
+    return null;
+  }
+
+  return {
+    repoHash,
+    port,
+    nonce
+  };
+}
+
+function readProcessCommandLine(pid: number): string | null {
+  try {
+    return execFileSync("/bin/ps", ["-ww", "-p", `${pid}`, "-o", "command="], {
+      encoding: "utf8"
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+export function resolveRunningDaemonConnection(
+  targetRepo: string,
+  pid: number
+): DaemonConnection | null {
+  const commandLine = readProcessCommandLine(pid);
+  if (!commandLine) {
+    return null;
+  }
+
+  const metadata = parseDaemonProcessMetadata(commandLine);
+  if (!metadata || metadata.repoHash !== hashTargetRepo(targetRepo)) {
+    return null;
+  }
+
+  return getDaemonConnection(targetRepo, metadata.port, metadata.nonce);
+}
+
+export function quoteShellArgument(value: string): string {
+  return `'${value.split("'").join(`'"'"'`)}'`;
+}
+
+export function buildDaemonCommand(
+  subcommand: "start" | "stop" | "token",
+  targetRepo: string
+): string {
+  return `npm run browser:${subcommand} -- --repo ${quoteShellArgument(targetRepo)}`;
 }
 
 export function buildPageCommandRequest(args: string[]): {
@@ -43,8 +134,8 @@ export function buildPageCommandRequest(args: string[]): {
   };
 } {
   const subcommand = args[1];
-  const url = readOption(args, "--url");
-  const outputPath = readOption(args, "--output");
+  const url = readOptionValue(args, "--url");
+  const outputPath = readOptionValue(args, "--output");
   const allowLocalhost = hasFlag(args, "--allow-localhost");
 
   if (!url || !outputPath) {
@@ -69,22 +160,118 @@ export function openDaemonLogFile(logFilePath: string): number {
 }
 
 export function buildDaemonStatusPayload(
-  daemonState: DaemonState | null,
-  isRunning: boolean
+  daemonState: PersistedDaemonState | null,
+  isRunning: boolean,
+  connectionOverride?: DaemonConnection | null
 ): Record<string, unknown> {
+  const legacyRunningDaemon =
+    daemonState && isRunning && isLegacyDaemonState(daemonState) ? daemonState : null;
+  const unverifiedRunningDaemon =
+    daemonState && isRunning && !legacyRunningDaemon && !connectionOverride ? daemonState : null;
   return {
-    status: isRunning ? "running" : "stopped",
-    daemonState: daemonState ? redactDaemonState(daemonState) : null,
-    ...(daemonState
+    status:
+      legacyRunningDaemon || unverifiedRunningDaemon
+        ? "restart-required"
+        : isRunning
+          ? "running"
+          : "stopped",
+    daemonState: daemonState
+      ? redactDaemonState(
+          daemonState,
+          connectionOverride
+            ? {
+                host: connectionOverride.host,
+                port: connectionOverride.port
+              }
+            : undefined
+        )
+      : null,
+    ...(daemonState && isRunning && connectionOverride && !legacyRunningDaemon
       ? {
           tokenHint: "Run `npm run browser:token -- --repo <target-repo>` to reveal the bearer token."
         }
+      : {}),
+    ...(legacyRunningDaemon
+      ? {
+          restartRequired: true,
+          message: buildLegacyDaemonUpgradeMessage(legacyRunningDaemon.targetRepo)
+        }
+      : unverifiedRunningDaemon
+        ? {
+            restartRequired: true,
+            message: buildDaemonVerificationMessage(unverifiedRunningDaemon.targetRepo)
+          }
       : {})
   };
 }
 
-export function buildDaemonTokenPayload(daemonState: DaemonState): Record<string, unknown> {
-  return { token: daemonState.token };
+export function buildLegacyDaemonUpgradeMessage(targetRepo: string): string {
+  return `Browser daemon was started by an older version. Run \`${buildDaemonCommand("stop", targetRepo)}\` and then \`${buildDaemonCommand("start", targetRepo)}\`.`;
+}
+
+export function buildDaemonVerificationMessage(targetRepo: string): string {
+  return `Unable to verify the running browser daemon process. Run \`${buildDaemonCommand("stop", targetRepo)}\` and then \`${buildDaemonCommand("start", targetRepo)}\`.`;
+}
+
+export function buildDaemonNotRunningMessage(targetRepo: string): string {
+  return `Browser daemon is not running. Start it with \`${buildDaemonCommand("start", targetRepo)}\`.`;
+}
+
+export function assertStatusPortOption(
+  targetRepo: string,
+  connection: DaemonConnection | null,
+  portOverride?: number
+): void {
+  if (portOverride === undefined) {
+    return;
+  }
+  if (!connection) {
+    throw new Error(buildDaemonVerificationMessage(targetRepo));
+  }
+  if (portOverride !== connection.port) {
+    throw new Error(
+      `Browser daemon is running on port ${connection.port}. Re-run the command with --port ${connection.port} or restart the daemon on port ${portOverride}.`
+    );
+  }
+}
+
+export function assertStartPortOption(
+  connection: DaemonConnection,
+  portOverride?: number
+): void {
+  if (portOverride === undefined) {
+    return;
+  }
+  if (connection.port !== portOverride) {
+    throw new Error(
+      `Browser daemon is already running on port ${connection.port}. Stop it first before starting a daemon on port ${portOverride}.`
+    );
+  }
+}
+
+export function assertNoUnsupportedDaemonFlags(args: string[]): void {
+  if (args.includes("--token")) {
+    throw new Error(
+      "Custom daemon tokens are no longer supported. Stop the daemon and restart without --token."
+    );
+  }
+}
+
+export function shouldRestartRunningDaemon(
+  daemonState: PersistedDaemonState | null,
+  isRunning: boolean
+): boolean {
+  return Boolean(daemonState && isRunning && isLegacyDaemonState(daemonState));
+}
+
+export function buildDaemonTokenPayload(
+  daemonState: PersistedDaemonState,
+  connection: DaemonConnection
+): Record<string, unknown> {
+  if (isLegacyDaemonState(daemonState)) {
+    throw new Error(buildLegacyDaemonUpgradeMessage(daemonState.targetRepo));
+  }
+  return { token: connection.token };
 }
 
 async function waitForHealth(host: string, port: number): Promise<void> {
@@ -106,17 +293,30 @@ async function waitForHealth(host: string, port: number): Promise<void> {
 async function callDaemon(
   targetRepo: string,
   routePath: string,
-  init: RequestInit = {}
+  init: RequestInit = {},
+  portOverride?: number
 ): Promise<unknown> {
   const { daemonState } = getDaemonInfo(targetRepo);
   if (!daemonState || !isProcessAlive(daemonState.pid)) {
-    throw new Error("Browser daemon is not running. Start it with `npm run browser:start`.");
+    throw new Error(buildDaemonNotRunningMessage(targetRepo));
+  }
+  if (isLegacyDaemonState(daemonState)) {
+    throw new Error(buildLegacyDaemonUpgradeMessage(targetRepo));
+  }
+  const connection = resolveRunningDaemonConnection(targetRepo, daemonState.pid);
+  if (!connection) {
+    throw new Error(buildDaemonVerificationMessage(targetRepo));
+  }
+  if (portOverride !== undefined && portOverride !== connection.port) {
+    throw new Error(
+      `Browser daemon is running on port ${connection.port}. Re-run the command with --port ${connection.port} or restart the daemon on port ${portOverride}.`
+    );
   }
 
-  const response = await fetch(`http://${daemonState.host}:${daemonState.port}${routePath}`, {
+  const response = await fetch(`http://${connection.host}:${connection.port}${routePath}`, {
     ...init,
     headers: {
-      authorization: `Bearer ${daemonState.token}`,
+      authorization: `Bearer ${connection.token}`,
       "content-type": "application/json",
       ...(init.headers ?? {})
     }
@@ -130,25 +330,47 @@ async function callDaemon(
 
 async function handleDaemonCommand(args: string[]): Promise<void> {
   const subcommand = args[1];
-  const targetRepo = resolveTargetRepo(readOption(args, "--repo"));
+  const targetRepo = resolveTargetRepo(readOptionValue(args, "--repo"));
 
   if (subcommand === "start") {
+    assertNoUnsupportedDaemonFlags(args);
+    const requestedPort = readDaemonPortOption(args);
+    const startupPort = requestedPort ?? getDefaultDaemonPort(targetRepo);
     const { runtimePaths, daemonState } = getDaemonInfo(targetRepo);
-    if (daemonState && isProcessAlive(daemonState.pid)) {
-      console.log(JSON.stringify(buildDaemonStatusPayload(daemonState, true), null, 2));
+    const isRunning = daemonState ? isProcessAlive(daemonState.pid) : false;
+    if (daemonState && isRunning && isLegacyDaemonState(daemonState)) {
+      throw new Error(buildLegacyDaemonUpgradeMessage(targetRepo));
+    }
+    if (daemonState && isRunning) {
+      const runningConnection = resolveRunningDaemonConnection(targetRepo, daemonState.pid);
+      if (!runningConnection) {
+        throw new Error(buildDaemonVerificationMessage(targetRepo));
+      }
+      assertStartPortOption(runningConnection, requestedPort);
+      console.log(JSON.stringify(buildDaemonStatusPayload(daemonState, true, runningConnection), null, 2));
       return;
     }
 
     clearDaemonState(runtimePaths);
+    const metadata: DaemonProcessMetadata = {
+      repoHash: hashTargetRepo(targetRepo),
+      port: startupPort,
+      nonce: makeDaemonNonce()
+    };
+    const connection = getDaemonConnection(targetRepo, metadata.port, metadata.nonce);
 
-    const port = Number.parseInt(readOption(args, "--port") ?? `${DEFAULT_DAEMON_PORT}`, 10);
-    const token = readOption(args, "--token") ?? makeToken();
     const repoRoot = getRepoRoot();
     const tsxCliPath = path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
     const logFd = openDaemonLogFile(runtimePaths.daemonLogFile);
     const child = spawn(
       process.execPath,
-      [tsxCliPath, path.join(repoRoot, "src/browser/daemon-entry.ts"), "--repo", targetRepo, "--port", `${port}`, "--token", token],
+      [
+        tsxCliPath,
+        path.join(repoRoot, "src/browser/daemon-entry.ts"),
+        "--repo",
+        targetRepo,
+        ...buildDaemonMetadataArgs(metadata)
+      ],
       {
         cwd: repoRoot,
         detached: true,
@@ -156,9 +378,9 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
       }
     );
     child.unref();
-    await waitForHealth("127.0.0.1", port);
+    await waitForHealth(connection.host, connection.port);
     const currentState = getDaemonInfo(targetRepo).daemonState;
-    console.log(JSON.stringify(buildDaemonStatusPayload(currentState, true), null, 2));
+    console.log(JSON.stringify(buildDaemonStatusPayload(currentState, true, connection), null, 2));
     return;
   }
 
@@ -176,18 +398,39 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
   }
 
   if (subcommand === "status") {
+    const portOverride = readDaemonPortOption(args);
     const { daemonState } = getDaemonInfo(targetRepo);
     const isRunning = daemonState ? isProcessAlive(daemonState.pid) : false;
-    console.log(JSON.stringify(buildDaemonStatusPayload(daemonState, isRunning), null, 2));
+    const connection =
+      daemonState && isRunning && !isLegacyDaemonState(daemonState)
+        ? resolveRunningDaemonConnection(targetRepo, daemonState.pid)
+        : null;
+    if (daemonState && isRunning && !isLegacyDaemonState(daemonState)) {
+      assertStatusPortOption(targetRepo, connection, portOverride);
+    }
+    console.log(JSON.stringify(buildDaemonStatusPayload(daemonState, isRunning, connection), null, 2));
     return;
   }
 
   if (subcommand === "token") {
     const { daemonState } = getDaemonInfo(targetRepo);
     if (!daemonState || !isProcessAlive(daemonState.pid)) {
-      throw new Error("Browser daemon is not running. Start it with `npm run browser:start`.");
+      throw new Error(buildDaemonNotRunningMessage(targetRepo));
     }
-    console.log(JSON.stringify(buildDaemonTokenPayload(daemonState), null, 2));
+    if (isLegacyDaemonState(daemonState)) {
+      throw new Error(buildLegacyDaemonUpgradeMessage(targetRepo));
+    }
+    const connection = resolveRunningDaemonConnection(targetRepo, daemonState.pid);
+    if (!connection) {
+      throw new Error(buildDaemonVerificationMessage(targetRepo));
+    }
+    const portOverride = readDaemonPortOption(args);
+    if (portOverride !== undefined && portOverride !== connection.port) {
+      throw new Error(
+        `Browser daemon is running on port ${connection.port}. Re-run the command with --port ${connection.port} or restart the daemon on port ${portOverride}.`
+      );
+    }
+    console.log(JSON.stringify(buildDaemonTokenPayload(daemonState, connection), null, 2));
     return;
   }
 
@@ -195,18 +438,19 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
 }
 
 async function handlePageCommand(args: string[]): Promise<void> {
-  const targetRepo = resolveTargetRepo(readOption(args, "--repo"));
+  const targetRepo = resolveTargetRepo(readOptionValue(args, "--repo"));
+  const portOverride = readDaemonPortOption(args);
   const { routePath, body } = buildPageCommandRequest(args);
   const result = await callDaemon(targetRepo, routePath, {
     method: "POST",
     body: JSON.stringify(body)
-  });
+  }, portOverride);
   console.log(JSON.stringify(result, null, 2));
 }
 
 async function handleCookieCommand(args: string[]): Promise<void> {
   const subcommand = args[1];
-  const browser = readOption(args, "--browser") as SupportedCookieBrowser | undefined;
+  const browser = readOptionValue(args, "--browser") as SupportedCookieBrowser | undefined;
 
   if (!browser) {
     throw new Error("--browser is required.");
@@ -218,8 +462,9 @@ async function handleCookieCommand(args: string[]): Promise<void> {
   }
 
   if (subcommand === "import") {
-    const targetRepo = resolveTargetRepo(readOption(args, "--repo"));
-    const domains = readMultiOption(args, "--domain");
+    const targetRepo = resolveTargetRepo(readOptionValue(args, "--repo"));
+    const portOverride = readDaemonPortOption(args);
+    const domains = readMultiOptionValues(args, "--domain");
     if (domains.length === 0) {
       throw new Error("At least one --domain value is required.");
     }
@@ -227,7 +472,7 @@ async function handleCookieCommand(args: string[]): Promise<void> {
     const result = await callDaemon(targetRepo, "/cookies/import", {
       method: "POST",
       body: JSON.stringify({ browser, domains })
-    });
+    }, portOverride);
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -243,7 +488,7 @@ async function main(): Promise<void> {
     throw new Error("A command is required.");
   }
 
-  ensureRuntimePaths(resolveTargetRepo(readOption(args, "--repo")));
+  ensureRuntimePaths(resolveTargetRepo(readOptionValue(args, "--repo")));
 
   switch (topLevelCommand) {
     case "daemon":

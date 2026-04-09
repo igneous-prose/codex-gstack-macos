@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -46,21 +46,42 @@ vi.mock("playwright", () => ({
 }));
 
 import {
+  DAEMON_PORT_RANGE,
+  DEFAULT_PORT,
   PRIVATE_DIRECTORY_MODE,
   PRIVATE_FILE_MODE,
-  ensureRuntimePaths
+  ensureRuntimePaths,
+  getDaemonConnection
 } from "../src/browser/config.js";
+import { readMultiOptionValues, readOptionValue } from "../src/browser/argv.js";
 import {
+  assertStartPortOption,
+  assertStatusPortOption,
+  assertNoUnsupportedDaemonFlags,
+  buildDaemonMetadataArgs,
+  buildDaemonCommand,
+  buildDaemonNotRunningMessage,
+  buildDaemonVerificationMessage,
+  buildLegacyDaemonUpgradeMessage,
   buildPageCommandRequest,
   buildDaemonStatusPayload,
   buildDaemonTokenPayload,
-  openDaemonLogFile
+  openDaemonLogFile,
+  parseDaemonProcessMetadata,
+  quoteShellArgument,
+  readDaemonPortOption,
+  shouldRestartRunningDaemon
 } from "../src/browser/cli.js";
 import {
   SECURITY_BINARY,
   SQLITE3_BINARY
 } from "../src/browser/chromium-cookies.js";
-import { redactDaemonState, writeDaemonState } from "../src/browser/state.js";
+import {
+  isLegacyDaemonState,
+  readDaemonState,
+  redactDaemonState,
+  writeDaemonState
+} from "../src/browser/state.js";
 import { BrowserRuntime, validatePageUrl } from "../src/browser/runtime.js";
 
 describe("runtime hardening", () => {
@@ -140,9 +161,6 @@ describe("runtime hardening", () => {
     const runtimePaths = ensureRuntimePaths(targetRepo);
     writeDaemonState(runtimePaths, {
       pid: process.pid,
-      host: "127.0.0.1",
-      port: 47770,
-      token: "secret-token",
       targetRepo,
       startedAt: "2026-04-09T10:00:00.000Z"
     });
@@ -156,20 +174,74 @@ describe("runtime hardening", () => {
     expect(statSync(runtimePaths.daemonLogFile).mode & 0o777).toBe(PRIVATE_FILE_MODE);
   });
 
+  it("persists only minimal daemon state to disk", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-state-"));
+    tempDirs.push(targetRepo);
+
+    const runtimePaths = ensureRuntimePaths(targetRepo);
+    writeDaemonState(runtimePaths, {
+      pid: 123,
+      targetRepo,
+      startedAt: "2026-04-09T10:00:00.000Z"
+    });
+
+    const persistedState = JSON.parse(readFileSync(runtimePaths.daemonStateFile, "utf8")) as
+      Record<string, unknown>;
+
+    expect(persistedState).toEqual({
+      pid: 123,
+      targetRepo,
+      startedAt: "2026-04-09T10:00:00.000Z"
+    });
+    expect(persistedState).not.toHaveProperty("host");
+    expect(persistedState).not.toHaveProperty("port");
+    expect(persistedState).not.toHaveProperty("token");
+  });
+
+  it("detects legacy daemon state written by older versions", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-legacy-state-"));
+    tempDirs.push(targetRepo);
+
+    const runtimePaths = ensureRuntimePaths(targetRepo);
+    writeFileSync(
+      runtimePaths.daemonStateFile,
+      `${JSON.stringify({
+        pid: 123,
+        host: "127.0.0.1",
+        port: 47770,
+        token: "legacy-token",
+        targetRepo,
+        startedAt: "2026-04-09T10:00:00.000Z"
+      })}\n`,
+      {
+        encoding: "utf8",
+        mode: PRIVATE_FILE_MODE
+      }
+    );
+
+    const daemonState = readDaemonState(runtimePaths);
+
+    expect(daemonState).not.toBeNull();
+    expect(isLegacyDaemonState(daemonState!)).toBe(true);
+    expect(daemonState).toMatchObject({
+      pid: 123,
+      targetRepo,
+      startedAt: "2026-04-09T10:00:00.000Z"
+    });
+  });
+
   it("redacts daemon state for normal output", () => {
     expect(
       redactDaemonState({
         pid: 123,
-        host: "127.0.0.1",
-        port: 47770,
-        token: "secret-token",
         targetRepo: "/tmp/repo",
         startedAt: "2026-04-09T10:00:00.000Z"
       })
     ).toEqual({
       pid: 123,
+      connectionVerified: false,
       host: "127.0.0.1",
-      port: 47770,
+      port: null,
       targetRepo: "/tmp/repo",
       startedAt: "2026-04-09T10:00:00.000Z",
       token: "[redacted]",
@@ -180,20 +252,289 @@ describe("runtime hardening", () => {
   it("requires the explicit daemon token command to reveal the token", () => {
     const daemonState = {
       pid: process.pid,
-      host: "127.0.0.1",
-      port: 47770,
-      token: "secret-token",
+      targetRepo: "/tmp/repo",
+      startedAt: "2026-04-09T10:00:00.000Z"
+    };
+    const connection = getDaemonConnection(daemonState.targetRepo, 47770, "a".repeat(48));
+
+    const statusPayload = buildDaemonStatusPayload(daemonState, true, connection);
+    const tokenPayload = buildDaemonTokenPayload(daemonState, connection);
+
+    expect(JSON.stringify(statusPayload)).toContain('"token":"[redacted]"');
+    expect(JSON.stringify(statusPayload)).not.toContain(connection.token);
+    expect(statusPayload).toHaveProperty("tokenHint");
+    expect(tokenPayload).toEqual({ token: connection.token });
+  });
+
+  it("derives connection details from an explicit port override", () => {
+    const connection = getDaemonConnection("/tmp/repo", 50123, "b".repeat(48));
+    const statusPayload = buildDaemonStatusPayload(
+      {
+        pid: 123,
+        targetRepo: "/tmp/repo",
+        startedAt: "2026-04-09T10:00:00.000Z"
+      },
+      true,
+      connection
+    );
+
+    expect(connection.port).toBe(50123);
+    expect(connection.token).not.toBe(getDaemonConnection("/tmp/repo", 47770, "b".repeat(48)).token);
+    expect(statusPayload).toMatchObject({
+      daemonState: {
+        connectionVerified: true,
+        port: 50123
+      }
+    });
+  });
+
+  it("marks unverifiable running daemon state with an unknown port", () => {
+    const daemonState = {
+      pid: 123,
       targetRepo: "/tmp/repo",
       startedAt: "2026-04-09T10:00:00.000Z"
     };
 
     const statusPayload = buildDaemonStatusPayload(daemonState, true);
-    const tokenPayload = buildDaemonTokenPayload(daemonState);
 
-    expect(JSON.stringify(statusPayload)).toContain('"token":"[redacted]"');
-    expect(JSON.stringify(statusPayload)).not.toContain("secret-token");
-    expect(statusPayload).toHaveProperty("tokenHint");
-    expect(tokenPayload).toEqual({ token: "secret-token" });
+    expect(statusPayload).toMatchObject({
+      status: "restart-required",
+      restartRequired: true,
+      daemonState: {
+        host: "127.0.0.1",
+        port: null,
+        connectionVerified: false
+      },
+      message: buildDaemonVerificationMessage("/tmp/repo")
+    });
+    expect(statusPayload).not.toHaveProperty("tokenHint");
+  });
+
+  it("quotes repo paths safely for shell commands", () => {
+    expect(quoteShellArgument("/tmp/repo")).toBe("'/tmp/repo'");
+    expect(quoteShellArgument("/tmp/repo with spaces")).toBe("'/tmp/repo with spaces'");
+    expect(quoteShellArgument("/tmp/mark's repo")).toBe("'/tmp/mark'\"'\"'s repo'");
+  });
+
+  it("builds repo-scoped daemon commands", () => {
+    expect(buildDaemonCommand("start", "/tmp/repo")).toBe("npm run browser:start -- --repo '/tmp/repo'");
+    expect(buildDaemonCommand("stop", "/tmp/repo with spaces")).toBe(
+      "npm run browser:stop -- --repo '/tmp/repo with spaces'"
+    );
+  });
+
+  it("parses daemon process metadata from marker arguments", () => {
+    const metadataArgs = buildDaemonMetadataArgs({
+      repoHash: "a".repeat(64),
+      port: 50123,
+      nonce: "b".repeat(48)
+    });
+
+    expect(
+      parseDaemonProcessMetadata(
+        `node cli.mjs src/browser/daemon-entry.ts --repo /tmp/repo ${metadataArgs.join(" ")}`
+      )
+    ).toEqual({
+      repoHash: "a".repeat(64),
+      port: 50123,
+      nonce: "b".repeat(48)
+    });
+    expect(
+      parseDaemonProcessMetadata(
+        "node cli.mjs src/browser/daemon-entry.ts --repo /tmp/--repo-hash " +
+          "c".repeat(64) +
+          " --port 12345 --nonce " +
+          "d".repeat(48) +
+          ` ${metadataArgs.join(" ")}`
+      )
+    ).toEqual({
+      repoHash: "a".repeat(64),
+      port: 50123,
+      nonce: "b".repeat(48)
+    });
+    expect(
+      parseDaemonProcessMetadata(
+        "node cli.mjs src/browser/daemon-entry.ts --repo /tmp/repo --repo-hash " + "a".repeat(64) + " --port 50123"
+      )
+    ).toBeNull();
+    expect(
+      parseDaemonProcessMetadata(
+        `node cli.mjs src/browser/daemon-entry.ts --repo /tmp/repo ${metadataArgs.join(" ")} --extra junk`
+      )
+    ).toBeNull();
+    expect(parseDaemonProcessMetadata("node daemon-entry.ts --repo /tmp/repo")).toBeNull();
+  });
+
+  it("requires a restart before revealing a legacy daemon token", () => {
+    const legacyState = {
+      pid: 123,
+      host: "127.0.0.1",
+      port: 47770,
+      token: "legacy-token",
+      targetRepo: "/tmp/repo",
+      startedAt: "2026-04-09T10:00:00.000Z"
+    };
+
+    expect(() => buildDaemonTokenPayload(legacyState, getDaemonConnection("/tmp/repo", 47770, "d".repeat(48)))).toThrow(
+      buildLegacyDaemonUpgradeMessage("/tmp/repo")
+    );
+  });
+
+  it("marks running legacy daemons as restart-required", () => {
+    const legacyState = {
+      pid: 123,
+      host: "127.0.0.1",
+      port: 47770,
+      token: "legacy-token",
+      targetRepo: "/tmp/repo",
+      startedAt: "2026-04-09T10:00:00.000Z"
+    };
+
+    expect(buildDaemonStatusPayload(legacyState, true)).toMatchObject({
+      status: "restart-required",
+      restartRequired: true,
+      message: buildLegacyDaemonUpgradeMessage("/tmp/repo")
+    });
+    expect(shouldRestartRunningDaemon(legacyState, true)).toBe(true);
+    expect(shouldRestartRunningDaemon(legacyState, false)).toBe(false);
+  });
+
+  it("derives a stable per-repo daemon connection without persisting it", () => {
+    const first = getDaemonConnection("/tmp/repo", 47770, "e".repeat(48));
+    const second = getDaemonConnection("/tmp/repo", 47770, "e".repeat(48));
+    const different = getDaemonConnection("/tmp/other-repo", 47770, "e".repeat(48));
+
+    expect(first).toEqual(second);
+    expect(first.host).toBe("127.0.0.1");
+    expect(first.port).toBeGreaterThanOrEqual(DEFAULT_PORT);
+    expect(first.port).toBeLessThan(DEFAULT_PORT + DAEMON_PORT_RANGE);
+    expect(first.token).toMatch(/^[a-f0-9]{64}$/);
+    expect(different.port).toBe(first.port);
+    expect(different.token).not.toBe(first.token);
+  });
+
+  it("parses daemon port overrides and rejects invalid values", () => {
+    expect(readDaemonPortOption(["daemon", "start"])).toBeUndefined();
+    expect(readDaemonPortOption(["daemon", "start", "--port", "50123"])).toBe(50123);
+    expect(() => readDaemonPortOption(["daemon", "status", "--port"])).toThrow("--port requires a value.");
+    expect(() => readDaemonPortOption(["daemon", "status", "--port", "--repo", "/tmp/repo"])).toThrow(
+      "--port requires a value."
+    );
+    expect(() => readDaemonPortOption(["daemon", "status", "--port", "50123", "--port"])).toThrow(
+      "--port requires a value."
+    );
+    expect(() => readDaemonPortOption(["daemon", "start", "--port", "0"])).toThrow(
+      /between 1 and 65535/
+    );
+    expect(() => readDaemonPortOption(["daemon", "start", "--port", "65536"])).toThrow(
+      /between 1 and 65535/
+    );
+    expect(() => readDaemonPortOption(["daemon", "start", "--port", "50.1"])).toThrow(
+      /between 1 and 65535/
+    );
+  });
+
+  it("fails status --port checks when the running daemon cannot be verified", () => {
+    expect(() => assertStatusPortOption("/tmp/repo", null, 50123)).toThrow(
+      buildDaemonVerificationMessage("/tmp/repo")
+    );
+    expect(() => assertStatusPortOption("/tmp/repo", null, undefined)).not.toThrow();
+  });
+
+  it("allows plain browser:start to be idempotent for a daemon running on an overridden port", () => {
+    const connection = getDaemonConnection("/tmp/repo", 50123, "f".repeat(48));
+
+    expect(() => assertStartPortOption(connection, undefined)).not.toThrow();
+    expect(() => assertStartPortOption(connection, 50123)).not.toThrow();
+    expect(() => assertStartPortOption(connection, 47770)).toThrow(
+      "Browser daemon is already running on port 50123. Stop it first before starting a daemon on port 47770."
+    );
+  });
+
+  it("allows manual port overrides but still rejects custom tokens", () => {
+    expect(() => assertNoUnsupportedDaemonFlags(["daemon", "start"])).not.toThrow();
+    expect(() => assertNoUnsupportedDaemonFlags(["daemon", "start", "--port", "47770"])).not.toThrow();
+    expect(() => assertNoUnsupportedDaemonFlags(["daemon", "start", "--token", "secret"])).toThrow(
+      /no longer supported/
+    );
+  });
+
+  it("does not request automatic legacy daemon termination", () => {
+    const legacyState = {
+      pid: 123,
+      host: "127.0.0.1",
+      port: 47770,
+      token: "legacy-token",
+      targetRepo: "/tmp/repo",
+      startedAt: "2026-04-09T10:00:00.000Z"
+    };
+
+    expect(shouldRestartRunningDaemon(legacyState, true)).toBe(true);
+    expect(buildLegacyDaemonUpgradeMessage("/tmp/repo")).toContain("browser:stop -- --repo '/tmp/repo'");
+  });
+
+  it("includes repo-specific restart guidance in verification and not-running messages", () => {
+    expect(buildDaemonVerificationMessage("/tmp/repo with spaces")).toContain(
+      "npm run browser:stop -- --repo '/tmp/repo with spaces'"
+    );
+    expect(buildDaemonVerificationMessage("/tmp/repo with spaces")).toContain(
+      "npm run browser:start -- --repo '/tmp/repo with spaces'"
+    );
+    expect(buildDaemonNotRunningMessage("/tmp/mark's repo")).toContain(
+      "npm run browser:start -- --repo '/tmp/mark'\"'\"'s repo'"
+    );
+  });
+
+  it("rejects malformed single-value options instead of silently falling back", () => {
+    expect(() => readOptionValue(["daemon", "status", "--repo"], "--repo")).toThrow(
+      "--repo requires a value."
+    );
+    expect(() => readOptionValue(["daemon", "status", "--repo", "--port", "50123"], "--repo")).toThrow(
+      "--repo requires a value."
+    );
+    expect(() => readOptionValue(["daemon-entry", "--repo"], "--repo")).toThrow(
+      "--repo requires a value."
+    );
+    expect(() => readOptionValue(["daemon-entry", "--repo-hash"], "--repo-hash")).toThrow(
+      "--repo-hash requires a value."
+    );
+    expect(() => readOptionValue(["daemon-entry", "--nonce", "--repo", "/tmp/repo"], "--nonce")).toThrow(
+      "--nonce requires a value."
+    );
+  });
+
+  it("rejects malformed repeated --domain options", () => {
+    expect(readMultiOptionValues(["cookies", "import", "--domain", "example.com"], "--domain")).toEqual([
+      "example.com"
+    ]);
+    expect(() => readMultiOptionValues(["cookies", "import", "--domain"], "--domain")).toThrow(
+      "--domain requires a value."
+    );
+    expect(() =>
+      readMultiOptionValues(
+        ["cookies", "import", "--domain", "example.com", "--domain", "--repo", "/tmp/repo"],
+        "--domain"
+      )
+    ).toThrow("--domain requires a value.");
+  });
+
+  it("rejects page commands with malformed --url and --output flags", () => {
+    expect(() =>
+      buildPageCommandRequest(["page", "screenshot", "--url", "--output", "/tmp/out.png"])
+    ).toThrow("--url requires a value.");
+    expect(() =>
+      buildPageCommandRequest(["page", "screenshot", "--url", "https://example.com", "--output"])
+    ).toThrow("--output requires a value.");
+    expect(() =>
+      buildPageCommandRequest([
+        "page",
+        "screenshot",
+        "--url",
+        "https://example.com",
+        "--output",
+        "--allow-localhost"
+      ])
+    ).toThrow("--output requires a value.");
   });
 
   it("allows only http and https page URLs", async () => {
