@@ -1,11 +1,12 @@
 # codex-gstack-macos
 
-`codex-gstack-macos` is a private, Codex-only, macOS-only workflow kit for local repo skills and a localhost-only browser daemon.
+`codex-gstack-macos` is a Codex-only, macOS-only workflow kit for local repo skills and a localhost-only browser daemon.
 
 ## Boundaries
 
 - Supported hosts: Codex CLI and Codex app only
 - Supported platform: Apple Silicon macOS only
+- Repository visibility does not change the runtime exposure: the tool remains local-only even if the repo is public
 - Repo-local install first via `.agents/skills/*`
 - Runtime state only under `.codex-gstack/` inside the target repo
 - No Claude integration

@@ -17,4 +17,4 @@ This summary reflects the current hardening state of `codex-gstack-macos`.
 ## Notes
 
 - The earlier GitHub Actions Node 20 deprecation warning is no longer current after the workflow upgrade to `actions/checkout@v6` and `actions/setup-node@v6`.
-- Branch protection and some GitHub security features remain subject to GitHub account-plan limits on the private repository.
+- Branch protection and some GitHub security features remain subject to repository visibility and account-plan capabilities.
