@@ -54,12 +54,13 @@ import {
   getDaemonConnection
 } from "../src/browser/config.js";
 import {
-  assertNoDeprecatedDaemonStartFlags,
+  assertNoUnsupportedDaemonFlags,
   buildLegacyDaemonUpgradeMessage,
   buildPageCommandRequest,
   buildDaemonStatusPayload,
   buildDaemonTokenPayload,
   openDaemonLogFile,
+  readDaemonPortOption,
   shouldRestartRunningDaemon
 } from "../src/browser/cli.js";
 import {
@@ -257,6 +258,27 @@ describe("runtime hardening", () => {
     expect(tokenPayload).toEqual({ token: connection.token });
   });
 
+  it("derives connection details from an explicit port override", () => {
+    const connection = getDaemonConnection("/tmp/repo", 50123);
+    const statusPayload = buildDaemonStatusPayload(
+      {
+        pid: 123,
+        targetRepo: "/tmp/repo",
+        startedAt: "2026-04-09T10:00:00.000Z"
+      },
+      true,
+      50123
+    );
+
+    expect(connection.port).toBe(50123);
+    expect(connection.token).not.toBe(getDaemonConnection("/tmp/repo").token);
+    expect(statusPayload).toMatchObject({
+      daemonState: {
+        port: 50123
+      }
+    });
+  });
+
   it("requires a restart before revealing a legacy daemon token", () => {
     const legacyState = {
       pid: 123,
@@ -305,12 +327,24 @@ describe("runtime hardening", () => {
     expect(different.token).not.toBe(first.token);
   });
 
-  it("rejects deprecated daemon start flags", () => {
-    expect(() => assertNoDeprecatedDaemonStartFlags(["daemon", "start"])).not.toThrow();
-    expect(() => assertNoDeprecatedDaemonStartFlags(["daemon", "start", "--port", "47770"])).toThrow(
-      /no longer supported/
+  it("parses daemon port overrides and rejects invalid values", () => {
+    expect(readDaemonPortOption(["daemon", "start"])).toBeUndefined();
+    expect(readDaemonPortOption(["daemon", "start", "--port", "50123"])).toBe(50123);
+    expect(() => readDaemonPortOption(["daemon", "start", "--port", "0"])).toThrow(
+      /between 1 and 65535/
     );
-    expect(() => assertNoDeprecatedDaemonStartFlags(["daemon", "start", "--token", "secret"])).toThrow(
+    expect(() => readDaemonPortOption(["daemon", "start", "--port", "65536"])).toThrow(
+      /between 1 and 65535/
+    );
+    expect(() => readDaemonPortOption(["daemon", "start", "--port", "50.1"])).toThrow(
+      /between 1 and 65535/
+    );
+  });
+
+  it("allows manual port overrides but still rejects custom tokens", () => {
+    expect(() => assertNoUnsupportedDaemonFlags(["daemon", "start"])).not.toThrow();
+    expect(() => assertNoUnsupportedDaemonFlags(["daemon", "start", "--port", "47770"])).not.toThrow();
+    expect(() => assertNoUnsupportedDaemonFlags(["daemon", "start", "--token", "secret"])).toThrow(
       /no longer supported/
     );
   });

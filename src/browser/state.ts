@@ -35,8 +35,11 @@ export function isLegacyDaemonState(state: PersistedDaemonState): state is Legac
   );
 }
 
-export function redactDaemonState(state: PersistedDaemonState): PublicDaemonState {
-  const connection = getDaemonConnection(state.targetRepo);
+export function redactDaemonState(
+  state: PersistedDaemonState,
+  portOverride?: number
+): PublicDaemonState {
+  const connection = getDaemonConnection(state.targetRepo, portOverride);
   return {
     pid: state.pid,
     host: connection.host,

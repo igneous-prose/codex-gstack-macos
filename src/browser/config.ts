@@ -33,6 +33,11 @@ export interface DaemonConnection {
   readonly token: string;
 }
 
+export function getDefaultDaemonPort(targetRepo: string): number {
+  const digest = createHash("sha256").update(targetRepo).digest();
+  return DEFAULT_PORT + (digest.readUInt16BE(0) % DAEMON_PORT_RANGE);
+}
+
 export function resolveTargetRepo(inputPath?: string): string {
   const candidate = inputPath ? path.resolve(inputPath) : process.cwd();
   if (!existsSync(candidate)) {
@@ -66,11 +71,15 @@ export function ensureRuntimePaths(repoRoot: string): RuntimePaths {
   return runtimePaths;
 }
 
-export function getDaemonConnection(targetRepo: string): DaemonConnection {
-  const digest = createHash("sha256").update(targetRepo).digest();
+export function getDaemonConnection(targetRepo: string, portOverride?: number): DaemonConnection {
+  const defaultPort = getDefaultDaemonPort(targetRepo);
+  const port = portOverride ?? defaultPort;
+  const digest = createHash("sha256")
+    .update(port === defaultPort ? targetRepo : `${targetRepo}\n${port}`)
+    .digest();
   return {
     host: DEFAULT_HOST,
-    port: DEFAULT_PORT + (digest.readUInt16BE(0) % DAEMON_PORT_RANGE),
+    port,
     token: digest.toString("hex")
   };
 }

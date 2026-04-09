@@ -10,5 +10,10 @@ function readOption(args: string[], name: string): string | undefined {
 
 const args = process.argv.slice(2);
 const targetRepo = readOption(args, "--repo") ?? process.cwd();
+const portOption = readOption(args, "--port");
+const port = portOption ? Number.parseInt(portOption, 10) : undefined;
 
-await runDaemon({ targetRepo });
+await runDaemon({
+  targetRepo,
+  ...(port === undefined ? {} : { port })
+});

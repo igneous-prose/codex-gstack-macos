@@ -17,6 +17,7 @@ import { startBrowserServer } from "./server.js";
 
 export interface StartDaemonOptions {
   readonly targetRepo: string;
+  readonly port?: number;
 }
 
 export function coerceAllowLocalhost(value: unknown): boolean {
@@ -26,7 +27,7 @@ export function coerceAllowLocalhost(value: unknown): boolean {
 export async function runDaemon(options: StartDaemonOptions): Promise<void> {
   const targetRepo = resolveTargetRepo(options.targetRepo);
   const runtimePaths = ensureRuntimePaths(targetRepo);
-  const connection = getDaemonConnection(targetRepo);
+  const connection = getDaemonConnection(targetRepo, options.port);
 
   const runtime = new BrowserRuntime(targetRepo);
   const serverInfo = await startBrowserServer({
