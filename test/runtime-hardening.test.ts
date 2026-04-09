@@ -409,6 +409,48 @@ describe("runtime hardening", () => {
     expect(playwrightMocks.closePage).toHaveBeenCalledOnce();
   });
 
+  it("closes the page if request guard installation fails", async () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-runtime-"));
+    tempDirs.push(targetRepo);
+    const runtime = new BrowserRuntime(targetRepo);
+    playwrightMocks.routePage.mockRejectedValueOnce(new Error("route setup failed"));
+
+    await expect(runtime.screenshot("https://example.com", "/tmp/out.png", false)).rejects.toThrow(
+      "route setup failed"
+    );
+
+    expect(playwrightMocks.newPage).toHaveBeenCalledOnce();
+    expect(playwrightMocks.closePage).toHaveBeenCalledOnce();
+  });
+
+  it("closes the page if request guard teardown fails", async () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-runtime-"));
+    tempDirs.push(targetRepo);
+    const runtime = new BrowserRuntime(targetRepo);
+    playwrightMocks.unroutePage.mockRejectedValueOnce(new Error("route teardown failed"));
+
+    await expect(runtime.screenshot("https://example.com", "/tmp/out.png", false)).rejects.toThrow(
+      "route teardown failed"
+    );
+
+    expect(playwrightMocks.newPage).toHaveBeenCalledOnce();
+    expect(playwrightMocks.closePage).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the primary capture error if teardown also fails", async () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-runtime-"));
+    tempDirs.push(targetRepo);
+    const runtime = new BrowserRuntime(targetRepo);
+    playwrightMocks.goto.mockRejectedValueOnce(new Error("navigation failed"));
+    playwrightMocks.unroutePage.mockRejectedValueOnce(new Error("route teardown failed"));
+
+    await expect(runtime.screenshot("https://example.com", "/tmp/out.png", false)).rejects.toThrow(
+      "navigation failed"
+    );
+
+    expect(playwrightMocks.closePage).toHaveBeenCalledOnce();
+  });
+
   it("blocks redirected requests to private targets during capture", async () => {
     const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-runtime-"));
     tempDirs.push(targetRepo);
