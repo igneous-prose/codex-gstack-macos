@@ -7,10 +7,12 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("github workflows", () => {
-  it("uses node24-based checkout and setup-node majors in CI", () => {
+  it("uses current checkout/setup-node majors and least-privilege permissions in CI", () => {
     const ciWorkflow = readFileSync(path.join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
     expect(ciWorkflow).toContain("actions/checkout@v6");
     expect(ciWorkflow).toContain("actions/setup-node@v6");
+    expect(ciWorkflow).toContain("permissions:\n  contents: read");
+    expect(ciWorkflow).toContain("- run: npm run typecheck");
     expect(ciWorkflow).not.toContain("actions/checkout@v4");
     expect(ciWorkflow).not.toContain("actions/setup-node@v4");
   });
@@ -22,5 +24,13 @@ describe("github workflows", () => {
     );
     expect(releaseWorkflow).toContain("actions/checkout@v6");
     expect(releaseWorkflow).not.toContain("actions/checkout@v4");
+  });
+
+  it("keeps branch protection contexts aligned with CI jobs", () => {
+    const configureGithub = readFileSync(
+      path.join(repoRoot, "scripts", "configure-github.sh"),
+      "utf8"
+    );
+    expect(configureGithub).toContain('"contexts": ["lint", "typecheck", "test", "security"]');
   });
 });

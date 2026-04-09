@@ -110,7 +110,7 @@ cat >"$protection_payload" <<'JSON'
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["lint", "test", "security"]
+    "contexts": ["lint", "typecheck", "test", "security"]
   },
   "enforce_admins": false,
   "required_pull_request_reviews": null,

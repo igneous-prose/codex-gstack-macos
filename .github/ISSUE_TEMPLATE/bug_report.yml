@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a local runtime, install, or workflow bug
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This project is local-only. Do not include auth tokens, live cookie material, or filesystem paths you do not want to disclose.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - install
+        - browser daemon
+        - page capture
+        - cookie import
+        - GitHub automation
+        - docs
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: macOS version
+      placeholder: "macOS 15.x"
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Redact private repo names and local paths if needed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or output
+      description: Paste only redacted snippets.
