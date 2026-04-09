@@ -54,7 +54,9 @@ import {
   getDaemonConnection
 } from "../src/browser/config.js";
 import {
+  assertStatusPortOption,
   assertNoUnsupportedDaemonFlags,
+  buildDaemonVerificationMessage,
   buildLegacyDaemonUpgradeMessage,
   buildPageCommandRequest,
   buildDaemonStatusPayload,
@@ -223,8 +225,6 @@ describe("runtime hardening", () => {
   });
 
   it("redacts daemon state for normal output", () => {
-    const connection = getDaemonConnection("/tmp/repo", 47770, "c".repeat(48));
-
     expect(
       redactDaemonState({
         pid: 123,
@@ -233,8 +233,9 @@ describe("runtime hardening", () => {
       })
     ).toEqual({
       pid: 123,
-      host: connection.host,
-      port: connection.port,
+      connectionVerified: false,
+      host: "127.0.0.1",
+      port: null,
       targetRepo: "/tmp/repo",
       startedAt: "2026-04-09T10:00:00.000Z",
       token: "[redacted]",
@@ -250,7 +251,7 @@ describe("runtime hardening", () => {
     };
     const connection = getDaemonConnection(daemonState.targetRepo, 47770, "a".repeat(48));
 
-    const statusPayload = buildDaemonStatusPayload(daemonState, true);
+    const statusPayload = buildDaemonStatusPayload(daemonState, true, connection);
     const tokenPayload = buildDaemonTokenPayload(daemonState, connection);
 
     expect(JSON.stringify(statusPayload)).toContain('"token":"[redacted]"');
@@ -275,9 +276,31 @@ describe("runtime hardening", () => {
     expect(connection.token).not.toBe(getDaemonConnection("/tmp/repo", 47770, "b".repeat(48)).token);
     expect(statusPayload).toMatchObject({
       daemonState: {
+        connectionVerified: true,
         port: 50123
       }
     });
+  });
+
+  it("marks unverifiable running daemon state with an unknown port", () => {
+    const daemonState = {
+      pid: 123,
+      targetRepo: "/tmp/repo",
+      startedAt: "2026-04-09T10:00:00.000Z"
+    };
+
+    const statusPayload = buildDaemonStatusPayload(daemonState, true);
+
+    expect(statusPayload).toMatchObject({
+      status: "running",
+      daemonState: {
+        host: "127.0.0.1",
+        port: null,
+        connectionVerified: false
+      },
+      message: buildDaemonVerificationMessage()
+    });
+    expect(statusPayload).not.toHaveProperty("tokenHint");
   });
 
   it("parses daemon process metadata from marker arguments", () => {
@@ -356,6 +379,11 @@ describe("runtime hardening", () => {
     expect(() => readDaemonPortOption(["daemon", "start", "--port", "50.1"])).toThrow(
       /between 1 and 65535/
     );
+  });
+
+  it("fails status --port checks when the running daemon cannot be verified", () => {
+    expect(() => assertStatusPortOption(null, 50123)).toThrow(buildDaemonVerificationMessage());
+    expect(() => assertStatusPortOption(null, undefined)).not.toThrow();
   });
 
   it("allows manual port overrides but still rejects custom tokens", () => {

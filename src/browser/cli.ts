@@ -160,6 +160,8 @@ export function buildDaemonStatusPayload(
 ): Record<string, unknown> {
   const legacyRunningDaemon =
     daemonState && isRunning && isLegacyDaemonState(daemonState) ? daemonState : null;
+  const unverifiedRunningDaemon =
+    daemonState && isRunning && !legacyRunningDaemon && !connectionOverride ? daemonState : null;
   return {
     status: legacyRunningDaemon ? "restart-required" : isRunning ? "running" : "stopped",
     daemonState: daemonState
@@ -173,7 +175,7 @@ export function buildDaemonStatusPayload(
             : undefined
         )
       : null,
-    ...(daemonState
+    ...(daemonState && isRunning && connectionOverride && !legacyRunningDaemon
       ? {
           tokenHint: "Run `npm run browser:token -- --repo <target-repo>` to reveal the bearer token."
         }
@@ -183,12 +185,37 @@ export function buildDaemonStatusPayload(
           restartRequired: true,
           message: buildLegacyDaemonUpgradeMessage(legacyRunningDaemon.targetRepo)
         }
+      : unverifiedRunningDaemon
+        ? {
+            message: buildDaemonVerificationMessage()
+          }
       : {})
   };
 }
 
 export function buildLegacyDaemonUpgradeMessage(targetRepo: string): string {
   return `Browser daemon was started by an older version. Run \`npm run browser:stop -- --repo ${targetRepo}\` and then \`npm run browser:start -- --repo ${targetRepo}\`.`;
+}
+
+export function buildDaemonVerificationMessage(): string {
+  return "Unable to verify the running browser daemon process. Run `npm run browser:stop` and then `npm run browser:start`.";
+}
+
+export function assertStatusPortOption(
+  connection: DaemonConnection | null,
+  portOverride?: number
+): void {
+  if (portOverride === undefined) {
+    return;
+  }
+  if (!connection) {
+    throw new Error(buildDaemonVerificationMessage());
+  }
+  if (portOverride !== connection.port) {
+    throw new Error(
+      `Browser daemon is running on port ${connection.port}. Re-run the command with --port ${connection.port} or restart the daemon on port ${portOverride}.`
+    );
+  }
 }
 
 export function assertNoUnsupportedDaemonFlags(args: string[]): void {
@@ -247,9 +274,7 @@ async function callDaemon(
   }
   const connection = resolveRunningDaemonConnection(targetRepo, daemonState.pid);
   if (!connection) {
-    throw new Error(
-      "Unable to verify the running browser daemon process. Run `npm run browser:stop` and then `npm run browser:start`."
-    );
+    throw new Error(buildDaemonVerificationMessage());
   }
   if (portOverride !== undefined && portOverride !== connection.port) {
     throw new Error(
@@ -287,9 +312,7 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
     if (daemonState && isRunning) {
       const runningConnection = resolveRunningDaemonConnection(targetRepo, daemonState.pid);
       if (!runningConnection) {
-        throw new Error(
-          "Unable to verify the running browser daemon process. Run `npm run browser:stop` and then `npm run browser:start`."
-        );
+        throw new Error(buildDaemonVerificationMessage());
       }
       if (runningConnection.port !== requestedPort) {
         throw new Error(
@@ -359,10 +382,8 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
       daemonState && isRunning && !isLegacyDaemonState(daemonState)
         ? resolveRunningDaemonConnection(targetRepo, daemonState.pid)
         : null;
-    if (connection && portOverride !== undefined && portOverride !== connection.port) {
-      throw new Error(
-        `Browser daemon is running on port ${connection.port}. Re-run the command with --port ${connection.port} or restart the daemon on port ${portOverride}.`
-      );
+    if (daemonState && isRunning && !isLegacyDaemonState(daemonState)) {
+      assertStatusPortOption(connection, portOverride);
     }
     console.log(JSON.stringify(buildDaemonStatusPayload(daemonState, isRunning, connection), null, 2));
     return;
@@ -378,9 +399,7 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
     }
     const connection = resolveRunningDaemonConnection(targetRepo, daemonState.pid);
     if (!connection) {
-      throw new Error(
-        "Unable to verify the running browser daemon process. Run `npm run browser:stop` and then `npm run browser:start`."
-      );
+      throw new Error(buildDaemonVerificationMessage());
     }
     const portOverride = readDaemonPortOption(args);
     if (portOverride !== undefined && portOverride !== connection.port) {
