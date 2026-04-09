@@ -17,13 +17,17 @@ describe("github workflows", () => {
     expect(ciWorkflow).not.toContain("actions/setup-node@v4");
   });
 
-  it("uses the current checkout major in release workflow", () => {
+  it("uses the current checkout major and immutable release action pin in release workflow", () => {
     const releaseWorkflow = readFileSync(
       path.join(repoRoot, ".github", "workflows", "release.yml"),
       "utf8"
     );
     expect(releaseWorkflow).toContain("actions/checkout@v6");
+    expect(releaseWorkflow).toContain(
+      "softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b"
+    );
     expect(releaseWorkflow).not.toContain("actions/checkout@v4");
+    expect(releaseWorkflow).not.toContain("softprops/action-gh-release@v2");
   });
 
   it("keeps branch protection contexts aligned with CI jobs", () => {
