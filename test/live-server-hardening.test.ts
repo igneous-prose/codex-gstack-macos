@@ -1,26 +1,31 @@
+import { createServer } from "node:net";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_JSON_BODY_BYTES, startBrowserServer } from "../src/browser/server.js";
 
-describe("live browser server hardening", () => {
-  const servers: { close: (callback: (error?: Error | null) => void) => void }[] = [];
+async function canBindLoopback(): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const probe = createServer();
+
+    probe.once("error", () => {
+      resolve(false);
+    });
+
+    probe.listen(0, "127.0.0.1", () => {
+      probe.close(() => resolve(true));
+    });
+  });
+}
+
+const describeLive = (await canBindLoopback()) ? describe : describe.skip;
+
+describeLive("live browser server hardening", () => {
+  const serverClosers: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
-    await Promise.all(
-      servers.map(
-        (server) =>
-          new Promise<void>((resolve, reject) => {
-            server.close((error) => {
-              if (error) {
-                reject(error);
-                return;
-              }
-              resolve();
-            });
-          })
-      )
-    );
-    servers.length = 0;
+    await Promise.all(serverClosers.map((close) => close()));
+    serverClosers.length = 0;
   });
 
   async function startTestServer(handlerOverrides?: Partial<{
@@ -42,7 +47,7 @@ describe("live browser server hardening", () => {
       token: "secret-token",
       handlers
     });
-    servers.push(serverInfo.server);
+    serverClosers.push(serverInfo.close);
 
     return {
       handlers,

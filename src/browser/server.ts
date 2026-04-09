@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 
 import { DEFAULT_HOST, SUPPORTED_COOKIE_BROWSERS, type SupportedCookieBrowser } from "./config.js";
 
@@ -98,7 +99,10 @@ type ValidatedRoute =
     };
 
 function writeJson(response: ServerResponse, statusCode: number, body: unknown): void {
-  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
+  response.writeHead(statusCode, {
+    connection: "close",
+    "content-type": "application/json; charset=utf-8"
+  });
   response.end(`${JSON.stringify(body)}\n`);
 }
 
@@ -395,8 +399,10 @@ export async function startBrowserServer(options: BrowserServerOptions): Promise
   readonly server: Server;
   readonly host: string;
   readonly port: number;
+  readonly close: () => Promise<void>;
 }> {
   const host = options.host ?? DEFAULT_HOST;
+  const sockets = new Set<Socket>();
 
   const server = createServer(async (request, response) => {
     try {
@@ -444,6 +450,13 @@ export async function startBrowserServer(options: BrowserServerOptions): Promise
     }
   });
 
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => {
+      sockets.delete(socket);
+    });
+  });
+
   await new Promise<void>((resolve) => {
     server.listen(options.port, host, () => resolve());
   });
@@ -453,5 +466,25 @@ export async function startBrowserServer(options: BrowserServerOptions): Promise
     throw new Error("Failed to obtain daemon bind address.");
   }
 
-  return { server, host, port: address.port };
+  return {
+    server,
+    host,
+    port: address.port,
+    close: async () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+
+        server.closeIdleConnections?.();
+        server.closeAllConnections?.();
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+      })
+  };
 }
