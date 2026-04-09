@@ -375,15 +375,20 @@ export class BrowserRuntime {
     return this.runExclusive(async () => {
       const page = await (await this.getContext()).newPage();
       let blockedError: Error | null = null;
-      const removeRequestGuard = await installRequestGuard(
-        page,
-        allowLocalhost,
-        (error) => {
-          blockedError = error;
-        }
-      );
+      let removeRequestGuard: (() => Promise<void>) | null = null;
+      let primaryError: unknown;
+      let cleanupError: unknown;
+      let result: { outputPath: string } | undefined;
 
       try {
+        removeRequestGuard = await installRequestGuard(
+          page,
+          allowLocalhost,
+          (error) => {
+            blockedError = error;
+          }
+        );
+
         try {
           await page.goto(validatedUrl, { waitUntil: "domcontentloaded" });
         } catch (error) {
@@ -399,11 +404,33 @@ export class BrowserRuntime {
         if (blockedError) {
           throw blockedError;
         }
-        return { outputPath: validatedOutputPath };
-      } finally {
-        await removeRequestGuard();
-        await page.close();
+        result = { outputPath: validatedOutputPath };
+      } catch (error) {
+        primaryError = error;
       }
+
+      try {
+        await removeRequestGuard?.();
+      } catch (error) {
+        cleanupError = error;
+      }
+
+      try {
+        await page.close();
+      } catch (error) {
+        if (cleanupError === undefined) {
+          cleanupError = error;
+        }
+      }
+
+      if (primaryError !== undefined) {
+        throw primaryError;
+      }
+      if (cleanupError !== undefined) {
+        throw cleanupError;
+      }
+
+      return result ?? { outputPath: validatedOutputPath };
     });
   }
 
