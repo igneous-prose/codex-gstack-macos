@@ -56,6 +56,8 @@ import {
 import {
   assertStatusPortOption,
   assertNoUnsupportedDaemonFlags,
+  buildDaemonCommand,
+  buildDaemonNotRunningMessage,
   buildDaemonVerificationMessage,
   buildLegacyDaemonUpgradeMessage,
   buildPageCommandRequest,
@@ -63,6 +65,7 @@ import {
   buildDaemonTokenPayload,
   openDaemonLogFile,
   parseDaemonProcessMetadata,
+  quoteShellArgument,
   readDaemonPortOption,
   shouldRestartRunningDaemon
 } from "../src/browser/cli.js";
@@ -298,9 +301,22 @@ describe("runtime hardening", () => {
         port: null,
         connectionVerified: false
       },
-      message: buildDaemonVerificationMessage()
+      message: buildDaemonVerificationMessage("/tmp/repo")
     });
     expect(statusPayload).not.toHaveProperty("tokenHint");
+  });
+
+  it("quotes repo paths safely for shell commands", () => {
+    expect(quoteShellArgument("/tmp/repo")).toBe("'/tmp/repo'");
+    expect(quoteShellArgument("/tmp/repo with spaces")).toBe("'/tmp/repo with spaces'");
+    expect(quoteShellArgument("/tmp/mark's repo")).toBe("'/tmp/mark'\"'\"'s repo'");
+  });
+
+  it("builds repo-scoped daemon commands", () => {
+    expect(buildDaemonCommand("start", "/tmp/repo")).toBe("npm run browser:start -- --repo '/tmp/repo'");
+    expect(buildDaemonCommand("stop", "/tmp/repo with spaces")).toBe(
+      "npm run browser:stop -- --repo '/tmp/repo with spaces'"
+    );
   });
 
   it("parses daemon process metadata from marker arguments", () => {
@@ -382,8 +398,10 @@ describe("runtime hardening", () => {
   });
 
   it("fails status --port checks when the running daemon cannot be verified", () => {
-    expect(() => assertStatusPortOption(null, 50123)).toThrow(buildDaemonVerificationMessage());
-    expect(() => assertStatusPortOption(null, undefined)).not.toThrow();
+    expect(() => assertStatusPortOption("/tmp/repo", null, 50123)).toThrow(
+      buildDaemonVerificationMessage("/tmp/repo")
+    );
+    expect(() => assertStatusPortOption("/tmp/repo", null, undefined)).not.toThrow();
   });
 
   it("allows manual port overrides but still rejects custom tokens", () => {
@@ -405,7 +423,19 @@ describe("runtime hardening", () => {
     };
 
     expect(shouldRestartRunningDaemon(legacyState, true)).toBe(true);
-    expect(buildLegacyDaemonUpgradeMessage("/tmp/repo")).toContain("browser:stop");
+    expect(buildLegacyDaemonUpgradeMessage("/tmp/repo")).toContain("browser:stop -- --repo '/tmp/repo'");
+  });
+
+  it("includes repo-specific restart guidance in verification and not-running messages", () => {
+    expect(buildDaemonVerificationMessage("/tmp/repo with spaces")).toContain(
+      "npm run browser:stop -- --repo '/tmp/repo with spaces'"
+    );
+    expect(buildDaemonVerificationMessage("/tmp/repo with spaces")).toContain(
+      "npm run browser:start -- --repo '/tmp/repo with spaces'"
+    );
+    expect(buildDaemonNotRunningMessage("/tmp/mark's repo")).toContain(
+      "npm run browser:start -- --repo '/tmp/mark'\"'\"'s repo'"
+    );
   });
 
   it("allows only http and https page URLs", async () => {
