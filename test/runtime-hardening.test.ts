@@ -295,7 +295,8 @@ describe("runtime hardening", () => {
     const statusPayload = buildDaemonStatusPayload(daemonState, true);
 
     expect(statusPayload).toMatchObject({
-      status: "running",
+      status: "restart-required",
+      restartRequired: true,
       daemonState: {
         host: "127.0.0.1",
         port: null,

@@ -19,7 +19,7 @@ The browser daemon is local-only.
 
 Normal status output redacts the daemon token. Reveal it only through the explicit local `npm run browser:token -- --repo /path/to/target-repo` command.
 
-If the daemon PID is still alive but the CLI cannot verify its live connection metadata, `browser:status` reports `daemonState.port` as `null` with `connectionVerified: false` and includes a restart message instead of guessing a port. In that state, rerun `npm run browser:stop -- --repo /path/to/target-repo` and then `npm run browser:start -- --repo /path/to/target-repo`. `browser:status --port <port>` also fails closed until the daemon can be verified again.
+If the daemon PID is still alive but the CLI cannot verify its live connection metadata, `browser:status` reports `status: "restart-required"`, `daemonState.port: null`, and `connectionVerified: false`, plus the restart message. In that state, rerun `npm run browser:stop -- --repo /path/to/target-repo` and then `npm run browser:start -- --repo /path/to/target-repo`. `browser:status --port <port>` also fails closed until the daemon can be verified again.
 
 The daemon intentionally omits:
 

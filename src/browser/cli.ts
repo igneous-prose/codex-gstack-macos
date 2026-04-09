@@ -174,7 +174,12 @@ export function buildDaemonStatusPayload(
   const unverifiedRunningDaemon =
     daemonState && isRunning && !legacyRunningDaemon && !connectionOverride ? daemonState : null;
   return {
-    status: legacyRunningDaemon ? "restart-required" : isRunning ? "running" : "stopped",
+    status:
+      legacyRunningDaemon || unverifiedRunningDaemon
+        ? "restart-required"
+        : isRunning
+          ? "running"
+          : "stopped",
     daemonState: daemonState
       ? redactDaemonState(
           daemonState,
@@ -198,6 +203,7 @@ export function buildDaemonStatusPayload(
         }
       : unverifiedRunningDaemon
         ? {
+            restartRequired: true,
             message: buildDaemonVerificationMessage(unverifiedRunningDaemon.targetRepo)
           }
       : {})
