@@ -29,10 +29,11 @@ npm run browser:status -- --repo /path/to/target-repo
 npm run browser:token -- --repo /path/to/target-repo
 npm run browser:screenshot -- --repo /path/to/target-repo --url https://example.com --output /tmp/example.png
 npm run browser:snapshot -- --repo /path/to/target-repo --url https://example.com --output /tmp/example.html
+npm run browser:snapshot -- --repo /path/to/target-repo --url http://localhost:3000 --allow-localhost --output /tmp/local-dev.html
 npm run browser:cookies:list -- --browser chrome
 npm run browser:cookies:import -- --repo /path/to/target-repo --browser chrome --domain example.com
 ```
 
-`browser:status` redacts the daemon token. Use `browser:token` only when you intentionally need to reveal it for a local call. Page capture commands accept `http://` and `https://` URLs only.
+`browser:status` redacts the daemon token. Use `browser:token` only when you intentionally need to reveal it for a local call. Page capture commands accept `http://` and `https://` URLs only, block literal private-network IP targets, and require `--allow-localhost` for local dev servers.
 
 See [docs/install.md](docs/install.md), [docs/browser.md](docs/browser.md), and [docs/cookie-import.md](docs/cookie-import.md).

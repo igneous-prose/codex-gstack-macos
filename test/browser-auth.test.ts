@@ -28,7 +28,7 @@ describe("browser server auth", () => {
       {
         method: "POST",
         path: "/page/screenshot",
-        body: JSON.stringify({ url: "https://example.com", outputPath: "/tmp/out.png" })
+        body: JSON.stringify({ url: "https://example.com", outputPath: "/tmp/out.png", allowLocalhost: false })
       },
       {
         port: 0,

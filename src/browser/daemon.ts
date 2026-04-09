@@ -35,8 +35,10 @@ export async function runDaemon(options: StartDaemonOptions): Promise<void> {
     port: options.port,
     token: options.token,
     handlers: {
-      screenshot: async (payload) => runtime.screenshot(payload.url, payload.outputPath),
-      snapshot: async (payload) => runtime.snapshot(payload.url, payload.outputPath),
+      screenshot: async (payload) =>
+        runtime.screenshot(payload.url, payload.outputPath, payload.allowLocalhost ?? false),
+      snapshot: async (payload) =>
+        runtime.snapshot(payload.url, payload.outputPath, payload.allowLocalhost ?? false),
       listCookieDomains: (browser) => runtime.listCookieDomains(browser),
       importCookies: async ({ browser, domains }) => runtime.importCookies(browser, domains)
     }
@@ -85,4 +87,3 @@ export function getDaemonInfo(targetRepo: string): {
 }
 
 export const DEFAULT_DAEMON_PORT = DEFAULT_PORT;
-

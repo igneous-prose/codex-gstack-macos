@@ -6,6 +6,7 @@ import { type SupportedCookieBrowser } from "./config.js";
 interface PageCommandPayload {
   readonly url: string;
   readonly outputPath: string;
+  readonly allowLocalhost?: boolean;
 }
 
 interface CookieImportPayload {

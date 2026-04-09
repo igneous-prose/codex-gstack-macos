@@ -10,6 +10,7 @@ import {
   ensureRuntimePaths
 } from "../src/browser/config.js";
 import {
+  buildPageCommandRequest,
   buildDaemonStatusPayload,
   buildDaemonTokenPayload,
   openDaemonLogFile
@@ -94,11 +95,67 @@ describe("runtime hardening", () => {
   });
 
   it("allows only http and https page URLs", () => {
-    expect(validatePageUrl("https://example.com/path")).toBe("https://example.com/path");
-    expect(validatePageUrl("http://example.com/path")).toBe("http://example.com/path");
+    expect(validatePageUrl("https://example.com/path", false)).toBe("https://example.com/path");
+    expect(validatePageUrl("http://example.com/path", false)).toBe("http://example.com/path");
     expect(() => validatePageUrl("file:///etc/passwd")).toThrow(/Only http:\/\/ and https:\/\//);
     expect(() => validatePageUrl("data:text/plain,hello")).toThrow(/Only http:\/\/ and https:\/\//);
     expect(() => validatePageUrl("javascript:alert(1)")).toThrow(/Only http:\/\/ and https:\/\//);
+  });
+
+  it("rejects localhost and loopback by default but allows them with opt-in", () => {
+    expect(() => validatePageUrl("http://localhost:3000", false)).toThrow(/--allow-localhost/);
+    expect(() => validatePageUrl("http://127.0.0.1:3000", false)).toThrow(/--allow-localhost/);
+    expect(() => validatePageUrl("http://[::1]:3000", false)).toThrow(/--allow-localhost/);
+
+    expect(validatePageUrl("http://localhost:3000", true)).toBe("http://localhost:3000/");
+    expect(validatePageUrl("http://127.0.0.1:3000", true)).toBe("http://127.0.0.1:3000/");
+    expect(validatePageUrl("http://[::1]:3000", true)).toBe("http://[::1]:3000/");
+  });
+
+  it("rejects literal private and link-local IPv4 targets", () => {
+    expect(() => validatePageUrl("http://10.0.0.1:3000", false)).toThrow(/Private and loopback IP/);
+    expect(() => validatePageUrl("http://172.16.5.4:3000", false)).toThrow(/Private and loopback IP/);
+    expect(() => validatePageUrl("http://192.168.1.20:3000", false)).toThrow(/Private and loopback IP/);
+    expect(() => validatePageUrl("http://169.254.10.20:3000", false)).toThrow(/Private and loopback IP/);
+  });
+
+  it("parses --allow-localhost only on page commands", () => {
+    expect(
+      buildPageCommandRequest([
+        "page",
+        "snapshot",
+        "--url",
+        "http://localhost:3000",
+        "--output",
+        "/tmp/out.html"
+      ])
+    ).toEqual({
+      routePath: "/page/snapshot",
+      body: {
+        url: "http://localhost:3000",
+        outputPath: "/tmp/out.html",
+        allowLocalhost: false
+      }
+    });
+
+    expect(
+      buildPageCommandRequest([
+        "page",
+        "screenshot",
+        "--url",
+        "http://localhost:3000",
+        "--allow-localhost",
+        "--output",
+        "/tmp/out.png"
+      ])
+    ).toEqual({
+      routePath: "/page/screenshot",
+      body: {
+        url: "http://localhost:3000",
+        outputPath: "/tmp/out.png",
+        allowLocalhost: true
+      }
+    });
   });
 
   it("pins cookie helper binaries to absolute macOS system paths", () => {

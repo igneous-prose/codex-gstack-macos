@@ -7,7 +7,66 @@ import { type SupportedCookieBrowser } from "./config.js";
 import { importCookiesForDomains, listCookieDomains } from "./chromium-cookies.js";
 import { validateOutputPath } from "./path-policy.js";
 
-function validatePageUrl(candidateUrl: string): string {
+function isIpv4Address(host: string): boolean {
+  const octets = host.split(".");
+  if (octets.length !== 4) {
+    return false;
+  }
+  return octets.every((octet) => {
+    if (!/^\d+$/.test(octet)) {
+      return false;
+    }
+    const value = Number.parseInt(octet, 10);
+    return value >= 0 && value <= 255;
+  });
+}
+
+function isBlockedPrivateIpv4(host: string): boolean {
+  if (!isIpv4Address(host)) {
+    return false;
+  }
+
+  const octets = host.split(".").map((octet) => Number.parseInt(octet, 10));
+  const first = octets[0];
+  const second = octets[1];
+  if (first === undefined || second === undefined) {
+    return false;
+  }
+
+  if (first === 10) {
+    return true;
+  }
+
+  if (first === 127) {
+    return true;
+  }
+
+  if (first === 169 && second === 254) {
+    return true;
+  }
+
+  if (first === 172 && second >= 16 && second <= 31) {
+    return true;
+  }
+
+  if (first === 192 && second === 168) {
+    return true;
+  }
+
+  return false;
+}
+
+function isLocalhostHost(host: string): boolean {
+  const normalizedHost = host.trim().toLowerCase();
+  return (
+    normalizedHost === "localhost" ||
+    normalizedHost === "127.0.0.1" ||
+    normalizedHost === "::1" ||
+    normalizedHost === "[::1]"
+  );
+}
+
+function validatePageUrl(candidateUrl: string, allowLocalhost = false): string {
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(candidateUrl);
@@ -17,6 +76,19 @@ function validatePageUrl(candidateUrl: string): string {
 
   if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
     throw new Error("Only http:// and https:// URLs are allowed.");
+  }
+
+  const host = parsedUrl.hostname.toLowerCase();
+
+  if (isLocalhostHost(host)) {
+    if (!allowLocalhost) {
+      throw new Error("Localhost targets require --allow-localhost for local dev verification.");
+    }
+    return parsedUrl.toString();
+  }
+
+  if (isBlockedPrivateIpv4(host)) {
+    throw new Error("Private and loopback IP targets are blocked.");
   }
 
   return parsedUrl.toString();
@@ -35,9 +107,13 @@ export class BrowserRuntime {
     this.browser = null;
   }
 
-  async screenshot(url: string, outputPath: string): Promise<{ outputPath: string }> {
+  async screenshot(
+    url: string,
+    outputPath: string,
+    allowLocalhost = false
+  ): Promise<{ outputPath: string }> {
     const page = await (await this.getContext()).newPage();
-    const validatedUrl = validatePageUrl(url);
+    const validatedUrl = validatePageUrl(url, allowLocalhost);
     const validatedOutputPath = validateOutputPath(this.repoRoot, outputPath);
     mkdirSync(path.dirname(validatedOutputPath), { recursive: true });
 
@@ -50,9 +126,13 @@ export class BrowserRuntime {
     }
   }
 
-  async snapshot(url: string, outputPath: string): Promise<{ outputPath: string }> {
+  async snapshot(
+    url: string,
+    outputPath: string,
+    allowLocalhost = false
+  ): Promise<{ outputPath: string }> {
     const page = await (await this.getContext()).newPage();
-    const validatedUrl = validatePageUrl(url);
+    const validatedUrl = validatePageUrl(url, allowLocalhost);
     const validatedOutputPath = validateOutputPath(this.repoRoot, outputPath);
     mkdirSync(path.dirname(validatedOutputPath), { recursive: true });
 
