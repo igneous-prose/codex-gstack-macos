@@ -30,6 +30,38 @@ function readMultiOption(args: string[], name: string): string[] {
   return values;
 }
 
+function hasFlag(args: string[], name: string): boolean {
+  return args.includes(name);
+}
+
+export function buildPageCommandRequest(args: string[]): {
+  routePath: "/page/screenshot" | "/page/snapshot";
+  body: {
+    url: string;
+    outputPath: string;
+    allowLocalhost: boolean;
+  };
+} {
+  const subcommand = args[1];
+  const url = readOption(args, "--url");
+  const outputPath = readOption(args, "--output");
+  const allowLocalhost = hasFlag(args, "--allow-localhost");
+
+  if (!url || !outputPath) {
+    throw new Error("--url and --output are required.");
+  }
+
+  const routePath = subcommand === "screenshot" ? "/page/screenshot" : "/page/snapshot";
+  return {
+    routePath,
+    body: {
+      url,
+      outputPath,
+      allowLocalhost
+    }
+  };
+}
+
 export function openDaemonLogFile(logFilePath: string): number {
   const logFd = openSync(logFilePath, "a", PRIVATE_FILE_MODE);
   chmodSync(logFilePath, PRIVATE_FILE_MODE);
@@ -163,19 +195,11 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
 }
 
 async function handlePageCommand(args: string[]): Promise<void> {
-  const subcommand = args[1];
   const targetRepo = resolveTargetRepo(readOption(args, "--repo"));
-  const url = readOption(args, "--url");
-  const outputPath = readOption(args, "--output");
-
-  if (!url || !outputPath) {
-    throw new Error("--url and --output are required.");
-  }
-
-  const routePath = subcommand === "screenshot" ? "/page/screenshot" : "/page/snapshot";
+  const { routePath, body } = buildPageCommandRequest(args);
   const result = await callDaemon(targetRepo, routePath, {
     method: "POST",
-    body: JSON.stringify({ url, outputPath })
+    body: JSON.stringify(body)
   });
   console.log(JSON.stringify(result, null, 2));
 }
