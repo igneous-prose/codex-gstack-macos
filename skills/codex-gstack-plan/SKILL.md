@@ -1,17 +1,16 @@
 # codex-gstack-plan
 
-Use this skill to turn a repo task into an execution-ready plan for Codex.
+Use this skill as a compatibility alias for the newer Codex-first planning flow.
 
 ## Workflow
 
-1. Read the local repo and current diffs first.
-2. State the goal, constraints, and acceptance criteria.
-3. Propose the smallest change that fits the repo.
-4. Prefer repo-local commands and repo-local skills.
+1. Prefer `codex-gstack-office-hours` when the request starts as raw user intent.
+2. Prefer `codex-gstack-autoplan` when the user wants a reviewed implementation plan.
+3. Keep the resulting brief and plan under `docs/gstack/<initiative-id>/`.
+4. Stay plan-first unless the user explicitly asks to implement next.
 
 ## Commands
 
 ```bash
 npm run doctor -- /path/to/target-repo
 ```
-

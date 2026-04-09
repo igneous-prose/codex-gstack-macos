@@ -22,3 +22,4 @@ npm run security
 - Do not add global Codex config edits or hook installers.
 - Do not add telemetry, tunnels, or remote browser sharing.
 - Keep cookie handling explicit and off the default path.
+- Keep workflow artifacts tracked under `docs/gstack/` and machine state under `.codex-gstack/workflow/`.

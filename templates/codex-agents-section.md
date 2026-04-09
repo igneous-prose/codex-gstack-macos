@@ -1,0 +1,15 @@
+<!-- codex-gstack:start -->
+## codex-gstack
+
+This repo uses the Codex-first gstack workflow. Team bootstrap mode: __MODE__.
+
+Route freeform workflow requests through `codex-gstack-router`, which should run `$HOME/.codex/gstack-macos/bin/gstack-workflow-route --repo <target-repo> --input "<user request>"`.
+Use `codex-gstack-office-hours`, which should run `$HOME/.codex/gstack-macos/bin/gstack-workflow-office-hours --repo <target-repo> --input "<reframed user intent>"`.
+Use `codex-gstack-autoplan`, which should run `$HOME/.codex/gstack-macos/bin/gstack-workflow-autoplan --repo <target-repo> [--initiative-id <id>] [--input "<user intent>"]`.
+Use `$HOME/.codex/gstack-macos/bin/gstack-workflow-status --repo <target-repo>` before `codex-gstack-review` or `codex-gstack-qa` so they can read the current `plan.md`.
+
+Available workflow skills: `codex-gstack-router`, `codex-gstack-office-hours`, `codex-gstack-autoplan`, `codex-gstack-plan-ceo-review`, `codex-gstack-plan-design-review`, `codex-gstack-plan-eng-review`, `codex-gstack-retro`, `codex-gstack-review`, `codex-gstack-qa`, `codex-gstack-ship`, `codex-gstack-browse`, `codex-gstack-document-release`, `codex-gstack-security-review`, `codex-gstack-plan`.
+
+Workflow artifacts live under `docs/gstack/<initiative-id>/`.
+Machine state lives under `.codex-gstack/workflow/`.
+<!-- codex-gstack:end -->

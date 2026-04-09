@@ -7,6 +7,8 @@ target_repo="${1:-$PWD}"
 mkdir -p "$target_repo/.agents/skills"
 mkdir -p "$target_repo/.codex-gstack/browser"
 mkdir -p "$target_repo/.codex-gstack/logs"
+mkdir -p "$target_repo/.codex-gstack/workflow"
+mkdir -p "$target_repo/docs/gstack"
 
 for skill_dir in "$repo_root"/skills/*; do
   skill_name="$(basename "$skill_dir")"
@@ -14,5 +16,8 @@ for skill_dir in "$repo_root"/skills/*; do
   cp -R "$skill_dir" "$target_repo/.agents/skills/$skill_name"
 done
 
-echo "Installed repo-local skills into $target_repo/.agents/skills"
+if [[ ! -f "$target_repo/docs/gstack/README.md" ]]; then
+  cp "$repo_root/templates/docs-gstack-readme.md" "$target_repo/docs/gstack/README.md"
+fi
 
+echo "Installed repo-local skills into $target_repo/.agents/skills"
