@@ -53,6 +53,7 @@ import {
   ensureRuntimePaths,
   getDaemonConnection
 } from "../src/browser/config.js";
+import { readMultiOptionValues, readOptionValue } from "../src/browser/argv.js";
 import {
   assertStartPortOption,
   assertStatusPortOption,
@@ -415,6 +416,13 @@ describe("runtime hardening", () => {
   it("parses daemon port overrides and rejects invalid values", () => {
     expect(readDaemonPortOption(["daemon", "start"])).toBeUndefined();
     expect(readDaemonPortOption(["daemon", "start", "--port", "50123"])).toBe(50123);
+    expect(() => readDaemonPortOption(["daemon", "status", "--port"])).toThrow("--port requires a value.");
+    expect(() => readDaemonPortOption(["daemon", "status", "--port", "--repo", "/tmp/repo"])).toThrow(
+      "--port requires a value."
+    );
+    expect(() => readDaemonPortOption(["daemon", "status", "--port", "50123", "--port"])).toThrow(
+      "--port requires a value."
+    );
     expect(() => readDaemonPortOption(["daemon", "start", "--port", "0"])).toThrow(
       /between 1 and 65535/
     );
@@ -475,6 +483,58 @@ describe("runtime hardening", () => {
     expect(buildDaemonNotRunningMessage("/tmp/mark's repo")).toContain(
       "npm run browser:start -- --repo '/tmp/mark'\"'\"'s repo'"
     );
+  });
+
+  it("rejects malformed single-value options instead of silently falling back", () => {
+    expect(() => readOptionValue(["daemon", "status", "--repo"], "--repo")).toThrow(
+      "--repo requires a value."
+    );
+    expect(() => readOptionValue(["daemon", "status", "--repo", "--port", "50123"], "--repo")).toThrow(
+      "--repo requires a value."
+    );
+    expect(() => readOptionValue(["daemon-entry", "--repo"], "--repo")).toThrow(
+      "--repo requires a value."
+    );
+    expect(() => readOptionValue(["daemon-entry", "--repo-hash"], "--repo-hash")).toThrow(
+      "--repo-hash requires a value."
+    );
+    expect(() => readOptionValue(["daemon-entry", "--nonce", "--repo", "/tmp/repo"], "--nonce")).toThrow(
+      "--nonce requires a value."
+    );
+  });
+
+  it("rejects malformed repeated --domain options", () => {
+    expect(readMultiOptionValues(["cookies", "import", "--domain", "example.com"], "--domain")).toEqual([
+      "example.com"
+    ]);
+    expect(() => readMultiOptionValues(["cookies", "import", "--domain"], "--domain")).toThrow(
+      "--domain requires a value."
+    );
+    expect(() =>
+      readMultiOptionValues(
+        ["cookies", "import", "--domain", "example.com", "--domain", "--repo", "/tmp/repo"],
+        "--domain"
+      )
+    ).toThrow("--domain requires a value.");
+  });
+
+  it("rejects page commands with malformed --url and --output flags", () => {
+    expect(() =>
+      buildPageCommandRequest(["page", "screenshot", "--url", "--output", "/tmp/out.png"])
+    ).toThrow("--url requires a value.");
+    expect(() =>
+      buildPageCommandRequest(["page", "screenshot", "--url", "https://example.com", "--output"])
+    ).toThrow("--output requires a value.");
+    expect(() =>
+      buildPageCommandRequest([
+        "page",
+        "screenshot",
+        "--url",
+        "https://example.com",
+        "--output",
+        "--allow-localhost"
+      ])
+    ).toThrow("--output requires a value.");
   });
 
   it("allows only http and https page URLs", async () => {

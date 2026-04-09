@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import { readMultiOptionValues, readOptionValue } from "./argv.js";
 import { listCookieDomains } from "./chromium-cookies.js";
 import {
   ensureRuntimePaths,
@@ -29,29 +30,12 @@ function getRepoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 }
 
-function readOption(args: string[], name: string): string | undefined {
-  const index = args.indexOf(name);
-  return index === -1 ? undefined : args[index + 1];
-}
-
-function readMultiOption(args: string[], name: string): string[] {
-  const values: string[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const current = args[index];
-    const next = args[index + 1];
-    if (current === name && next) {
-      values.push(next);
-    }
-  }
-  return values;
-}
-
 function hasFlag(args: string[], name: string): boolean {
   return args.includes(name);
 }
 
 export function readDaemonPortOption(args: string[]): number | undefined {
-  const portOption = readOption(args, "--port");
+  const portOption = readOptionValue(args, "--port");
   if (portOption === undefined) {
     return undefined;
   }
@@ -150,8 +134,8 @@ export function buildPageCommandRequest(args: string[]): {
   };
 } {
   const subcommand = args[1];
-  const url = readOption(args, "--url");
-  const outputPath = readOption(args, "--output");
+  const url = readOptionValue(args, "--url");
+  const outputPath = readOptionValue(args, "--output");
   const allowLocalhost = hasFlag(args, "--allow-localhost");
 
   if (!url || !outputPath) {
@@ -346,7 +330,7 @@ async function callDaemon(
 
 async function handleDaemonCommand(args: string[]): Promise<void> {
   const subcommand = args[1];
-  const targetRepo = resolveTargetRepo(readOption(args, "--repo"));
+  const targetRepo = resolveTargetRepo(readOptionValue(args, "--repo"));
 
   if (subcommand === "start") {
     assertNoUnsupportedDaemonFlags(args);
@@ -454,7 +438,7 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
 }
 
 async function handlePageCommand(args: string[]): Promise<void> {
-  const targetRepo = resolveTargetRepo(readOption(args, "--repo"));
+  const targetRepo = resolveTargetRepo(readOptionValue(args, "--repo"));
   const portOverride = readDaemonPortOption(args);
   const { routePath, body } = buildPageCommandRequest(args);
   const result = await callDaemon(targetRepo, routePath, {
@@ -466,7 +450,7 @@ async function handlePageCommand(args: string[]): Promise<void> {
 
 async function handleCookieCommand(args: string[]): Promise<void> {
   const subcommand = args[1];
-  const browser = readOption(args, "--browser") as SupportedCookieBrowser | undefined;
+  const browser = readOptionValue(args, "--browser") as SupportedCookieBrowser | undefined;
 
   if (!browser) {
     throw new Error("--browser is required.");
@@ -478,9 +462,9 @@ async function handleCookieCommand(args: string[]): Promise<void> {
   }
 
   if (subcommand === "import") {
-    const targetRepo = resolveTargetRepo(readOption(args, "--repo"));
+    const targetRepo = resolveTargetRepo(readOptionValue(args, "--repo"));
     const portOverride = readDaemonPortOption(args);
-    const domains = readMultiOption(args, "--domain");
+    const domains = readMultiOptionValues(args, "--domain");
     if (domains.length === 0) {
       throw new Error("At least one --domain value is required.");
     }
@@ -504,7 +488,7 @@ async function main(): Promise<void> {
     throw new Error("A command is required.");
   }
 
-  ensureRuntimePaths(resolveTargetRepo(readOption(args, "--repo")));
+  ensureRuntimePaths(resolveTargetRepo(readOptionValue(args, "--repo")));
 
   switch (topLevelCommand) {
     case "daemon":
