@@ -54,6 +54,7 @@ import {
   getDaemonConnection
 } from "../src/browser/config.js";
 import {
+  assertStartPortOption,
   assertStatusPortOption,
   assertNoUnsupportedDaemonFlags,
   buildDaemonCommand,
@@ -403,6 +404,16 @@ describe("runtime hardening", () => {
       buildDaemonVerificationMessage("/tmp/repo")
     );
     expect(() => assertStatusPortOption("/tmp/repo", null, undefined)).not.toThrow();
+  });
+
+  it("allows plain browser:start to be idempotent for a daemon running on an overridden port", () => {
+    const connection = getDaemonConnection("/tmp/repo", 50123, "f".repeat(48));
+
+    expect(() => assertStartPortOption(connection, undefined)).not.toThrow();
+    expect(() => assertStartPortOption(connection, 50123)).not.toThrow();
+    expect(() => assertStartPortOption(connection, 47770)).toThrow(
+      "Browser daemon is already running on port 50123. Stop it first before starting a daemon on port 47770."
+    );
   });
 
   it("allows manual port overrides but still rejects custom tokens", () => {

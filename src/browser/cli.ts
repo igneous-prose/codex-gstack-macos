@@ -240,6 +240,20 @@ export function assertStatusPortOption(
   }
 }
 
+export function assertStartPortOption(
+  connection: DaemonConnection,
+  portOverride?: number
+): void {
+  if (portOverride === undefined) {
+    return;
+  }
+  if (connection.port !== portOverride) {
+    throw new Error(
+      `Browser daemon is already running on port ${connection.port}. Stop it first before starting a daemon on port ${portOverride}.`
+    );
+  }
+}
+
 export function assertNoUnsupportedDaemonFlags(args: string[]): void {
   if (args.includes("--token")) {
     throw new Error(
@@ -325,7 +339,8 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
 
   if (subcommand === "start") {
     assertNoUnsupportedDaemonFlags(args);
-    const requestedPort = readDaemonPortOption(args) ?? getDefaultDaemonPort(targetRepo);
+    const requestedPort = readDaemonPortOption(args);
+    const startupPort = requestedPort ?? getDefaultDaemonPort(targetRepo);
     const { runtimePaths, daemonState } = getDaemonInfo(targetRepo);
     const isRunning = daemonState ? isProcessAlive(daemonState.pid) : false;
     if (daemonState && isRunning && isLegacyDaemonState(daemonState)) {
@@ -336,11 +351,7 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
       if (!runningConnection) {
         throw new Error(buildDaemonVerificationMessage(targetRepo));
       }
-      if (runningConnection.port !== requestedPort) {
-        throw new Error(
-          `Browser daemon is already running on port ${runningConnection.port}. Stop it first before starting a daemon on port ${requestedPort}.`
-        );
-      }
+      assertStartPortOption(runningConnection, requestedPort);
       console.log(JSON.stringify(buildDaemonStatusPayload(daemonState, true, runningConnection), null, 2));
       return;
     }
@@ -348,7 +359,7 @@ async function handleDaemonCommand(args: string[]): Promise<void> {
     clearDaemonState(runtimePaths);
     const metadata: DaemonProcessMetadata = {
       repoHash: hashTargetRepo(targetRepo),
-      port: requestedPort,
+      port: startupPort,
       nonce: makeDaemonNonce()
     };
     const connection = getDaemonConnection(targetRepo, metadata.port, metadata.nonce);
