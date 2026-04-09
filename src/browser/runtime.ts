@@ -1,8 +1,15 @@
 import { mkdirSync, writeFileSync } from "node:fs";
+import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import path from "node:path";
 
-import { chromium, type Browser, type BrowserContext } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type Page,
+  type Route
+} from "playwright";
 
 import { type SupportedCookieBrowser } from "./config.js";
 import { importCookiesForDomains, listCookieDomains } from "./chromium-cookies.js";
@@ -163,7 +170,77 @@ function parseMappedIpv4FromIpv6(host: string): string | null {
   ].join(".");
 }
 
-function validatePageUrl(candidateUrl: string, allowLocalhost = false): string {
+function classifyResolvedAddress(address: string): "loopback" | "private" | "public" {
+  if (isLocalhostHost(address)) {
+    return "loopback";
+  }
+
+  const mappedIpv4 = parseMappedIpv4FromIpv6(address);
+  if (mappedIpv4) {
+    if (isLocalhostHost(mappedIpv4)) {
+      return "loopback";
+    }
+    if (isBlockedPrivateIpv4(mappedIpv4)) {
+      return "private";
+    }
+    return "public";
+  }
+
+  if (isBlockedPrivateIpv4(address) || isBlockedPrivateIpv6(address)) {
+    return "private";
+  }
+
+  return "public";
+}
+
+type ResolvedHostnameClassification = "loopback" | "private" | "public";
+
+async function classifyResolvedHostname(host: string): Promise<ResolvedHostnameClassification> {
+  const normalizedHost = normalizeHostLiteral(host);
+  if (isIP(normalizedHost) !== 0) {
+    return "public";
+  }
+
+  let resolvedAddresses: { address: string; family: number }[];
+  try {
+    resolvedAddresses = await lookup(normalizedHost, { all: true, verbatim: true });
+  } catch {
+    throw new Error("Unable to resolve hostname for network policy validation.");
+  }
+
+  if (resolvedAddresses.length === 0) {
+    throw new Error("Unable to resolve hostname for network policy validation.");
+  }
+
+  let sawLoopback = false;
+  for (const entry of resolvedAddresses) {
+    const classification = classifyResolvedAddress(entry.address);
+    if (classification === "private") {
+      return "private";
+    }
+    if (classification === "loopback") {
+      sawLoopback = true;
+    }
+  }
+
+  return sawLoopback ? "loopback" : "public";
+}
+
+async function validateResolvedHostname(host: string, allowLocalhost: boolean): Promise<void> {
+  const classification = await classifyResolvedHostname(host);
+  if (classification === "private") {
+    throw new Error("Private and loopback IP targets are blocked.");
+  }
+
+  if (classification === "loopback" && !allowLocalhost) {
+    throw new Error("Localhost targets require --allow-localhost for local dev verification.");
+  }
+}
+
+async function validatePageUrl(
+  candidateUrl: string,
+  allowLocalhost = false
+): Promise<string> {
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(candidateUrl);
@@ -206,12 +283,37 @@ function validatePageUrl(candidateUrl: string, allowLocalhost = false): string {
     throw new Error("Private and loopback IP targets are blocked.");
   }
 
+  await validateResolvedHostname(host, allowLocalhost);
   return parsedUrl.toString();
+}
+
+async function installRequestGuard(
+  page: Page,
+  allowLocalhost: boolean,
+  setBlockedError: (error: Error) => void
+): Promise<() => Promise<void>> {
+  const handler = async (route: Route): Promise<void> => {
+    try {
+      await validatePageUrl(route.request().url(), allowLocalhost);
+      await route.continue();
+    } catch (error) {
+      setBlockedError(
+        error instanceof Error ? error : new Error("Blocked request by network policy.")
+      );
+      await route.abort("blockedbyclient");
+    }
+  };
+
+  await page.route("**/*", handler);
+  return async () => {
+    await page.unroute("**/*", handler);
+  };
 }
 
 export class BrowserRuntime {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
+  private operationQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly repoRoot: string) {}
 
@@ -254,8 +356,10 @@ export class BrowserRuntime {
     if (cookies.length === 0) {
       return { importedCount: 0 };
     }
-    await (await this.getContext()).addCookies(cookies);
-    return { importedCount: cookies.length };
+    return this.runExclusive(async () => {
+      await (await this.getContext()).addCookies(cookies);
+      return { importedCount: cookies.length };
+    });
   }
 
   private async capturePage(
@@ -264,19 +368,43 @@ export class BrowserRuntime {
     allowLocalhost: boolean,
     capture: (page: Awaited<ReturnType<BrowserContext["newPage"]>>, validatedOutputPath: string) => Promise<void>
   ): Promise<{ outputPath: string }> {
-    const validatedUrl = validatePageUrl(url, allowLocalhost);
+    const validatedUrl = await validatePageUrl(url, allowLocalhost);
     const validatedOutputPath = validateOutputPath(this.repoRoot, outputPath);
     mkdirSync(path.dirname(validatedOutputPath), { recursive: true });
 
-    const page = await (await this.getContext()).newPage();
+    return this.runExclusive(async () => {
+      const page = await (await this.getContext()).newPage();
+      let blockedError: Error | null = null;
+      const removeRequestGuard = await installRequestGuard(
+        page,
+        allowLocalhost,
+        (error) => {
+          blockedError = error;
+        }
+      );
 
-    try {
-      await page.goto(validatedUrl, { waitUntil: "domcontentloaded" });
-      await capture(page, validatedOutputPath);
-      return { outputPath: validatedOutputPath };
-    } finally {
-      await page.close();
-    }
+      try {
+        try {
+          await page.goto(validatedUrl, { waitUntil: "domcontentloaded" });
+        } catch (error) {
+          if (blockedError) {
+            throw blockedError;
+          }
+          throw error;
+        }
+        if (blockedError) {
+          throw blockedError;
+        }
+        await capture(page, validatedOutputPath);
+        if (blockedError) {
+          throw blockedError;
+        }
+        return { outputPath: validatedOutputPath };
+      } finally {
+        await removeRequestGuard();
+        await page.close();
+      }
+    });
   }
 
   private async getContext(): Promise<BrowserContext> {
@@ -289,6 +417,22 @@ export class BrowserRuntime {
     }
 
     return this.context;
+  }
+
+  private async runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.operationQueue;
+    let release: (() => void) | undefined;
+    this.operationQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await previous;
+
+    try {
+      return await operation();
+    } finally {
+      release?.();
+    }
   }
 }
 

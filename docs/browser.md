@@ -10,8 +10,10 @@ The browser daemon is local-only.
 - command routes authenticate before JSON body parsing
 - JSON request bodies on command routes are capped at `64 KiB`
 - allowed navigation targets: `http://` and `https://` only
-- blocked by default: localhost/loopback targets and literal wildcard, private-network, or local-scope IP targets, including local/private IPv6 literals
+- blocked by default: localhost/loopback targets and literal wildcard, private-network, local-scope IP targets, and hostnames that resolve to those targets, including local/private IPv6 literals
 - localhost access: allowed only when the page command includes `--allow-localhost`
+- hostname policy: if hostname resolution cannot be completed, the request is rejected rather than allowed
+- redirect policy: redirected request targets are revalidated against the same network policy during capture
 
 Normal status output redacts the daemon token. Reveal it only through the explicit local `npm run browser:token -- --repo /path/to/target-repo` command.
 
