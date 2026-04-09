@@ -23,12 +23,18 @@ describe("live browser server hardening", () => {
     servers.length = 0;
   });
 
-  async function startTestServer() {
+  async function startTestServer(handlerOverrides?: Partial<{
+    screenshot: (payload: { url: string; outputPath: string; allowLocalhost?: boolean }) => Promise<{ outputPath: string }>;
+    snapshot: (payload: { url: string; outputPath: string; allowLocalhost?: boolean }) => Promise<{ outputPath: string }>;
+    listCookieDomains: (browser: string) => string[];
+    importCookies: (payload: { browser: string; domains: string[] }) => Promise<{ importedCount: number }>;
+  }>) {
     const handlers = {
       screenshot: vi.fn(async () => ({ outputPath: "/tmp/out.png" })),
       snapshot: vi.fn(async () => ({ outputPath: "/tmp/out.html" })),
       listCookieDomains: vi.fn(() => ["example.com"]),
-      importCookies: vi.fn(async () => ({ importedCount: 1 }))
+      importCookies: vi.fn(async () => ({ importedCount: 1 })),
+      ...handlerOverrides
     };
 
     const serverInfo = await startBrowserServer({
@@ -222,5 +228,31 @@ describe("live browser server hardening", () => {
     expect(handlers.screenshot).not.toHaveBeenCalled();
     expect(handlers.snapshot).not.toHaveBeenCalled();
     expect(handlers.importCookies).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes unexpected handler failures to a generic 500 response", async () => {
+    const { baseUrl } = await startTestServer({
+      screenshot: vi.fn(async () => {
+        throw new Error("sensitive runtime failure");
+      })
+    });
+
+    const response = await fetch(`${baseUrl}/page/screenshot`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer secret-token",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        url: "https://example.com",
+        outputPath: "/tmp/out.png",
+        allowLocalhost: false
+      })
+    });
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      error: "Internal server error."
+    });
   });
 });

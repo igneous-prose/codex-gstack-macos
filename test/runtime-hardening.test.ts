@@ -4,6 +4,10 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const dnsMocks = vi.hoisted(() => ({
+  lookup: vi.fn()
+}));
+
 const playwrightMocks = vi.hoisted(() => ({
   launch: vi.fn(),
   newContext: vi.fn(),
@@ -15,6 +19,10 @@ const playwrightMocks = vi.hoisted(() => ({
   closePage: vi.fn(),
   closeContext: vi.fn(),
   closeBrowser: vi.fn()
+}));
+
+vi.mock("node:dns/promises", () => ({
+  lookup: dnsMocks.lookup
 }));
 
 vi.mock("playwright", () => ({
@@ -73,6 +81,27 @@ describe("runtime hardening", () => {
     playwrightMocks.newPage.mockResolvedValue(page);
     playwrightMocks.newContext.mockResolvedValue(context);
     playwrightMocks.launch.mockResolvedValue(browser);
+    dnsMocks.lookup.mockImplementation(async (hostname: string) => {
+      if (hostname === "example.com") {
+        return [{ address: "93.184.216.34", family: 4 }];
+      }
+      if (hostname === "public.example") {
+        return [{ address: "93.184.216.35", family: 4 }];
+      }
+      if (hostname === "loopback.example") {
+        return [{ address: "127.0.0.1", family: 4 }];
+      }
+      if (hostname === "private.example") {
+        return [{ address: "192.168.1.20", family: 4 }];
+      }
+      if (hostname === "mixed.example") {
+        return [
+          { address: "93.184.216.34", family: 4 },
+          { address: "10.0.0.5", family: 4 }
+        ];
+      }
+      return [{ address: "93.184.216.34", family: 4 }];
+    });
   });
 
   afterEach(() => {
@@ -144,54 +173,81 @@ describe("runtime hardening", () => {
     expect(tokenPayload).toEqual({ token: "secret-token" });
   });
 
-  it("allows only http and https page URLs", () => {
-    expect(validatePageUrl("https://example.com/path", false)).toBe("https://example.com/path");
-    expect(validatePageUrl("http://example.com/path", false)).toBe("http://example.com/path");
-    expect(() => validatePageUrl("file:///etc/passwd")).toThrow(/Only http:\/\/ and https:\/\//);
-    expect(() => validatePageUrl("data:text/plain,hello")).toThrow(/Only http:\/\/ and https:\/\//);
-    expect(() => validatePageUrl("javascript:alert(1)")).toThrow(/Only http:\/\/ and https:\/\//);
+  it("allows only http and https page URLs", async () => {
+    await expect(validatePageUrl("https://example.com/path", false)).resolves.toBe(
+      "https://example.com/path"
+    );
+    await expect(validatePageUrl("http://example.com/path", false)).resolves.toBe(
+      "http://example.com/path"
+    );
+    await expect(validatePageUrl("file:///etc/passwd")).rejects.toThrow(/Only http:\/\/ and https:\/\//);
+    await expect(validatePageUrl("data:text/plain,hello")).rejects.toThrow(/Only http:\/\/ and https:\/\//);
+    await expect(validatePageUrl("javascript:alert(1)")).rejects.toThrow(/Only http:\/\/ and https:\/\//);
   });
 
-  it("rejects localhost and loopback by default but allows them with opt-in", () => {
-    expect(() => validatePageUrl("http://localhost:3000", false)).toThrow(/--allow-localhost/);
-    expect(() => validatePageUrl("http://localhost.:3000", false)).toThrow(/--allow-localhost/);
-    expect(() => validatePageUrl("http://foo.localhost:3000", false)).toThrow(/--allow-localhost/);
-    expect(() => validatePageUrl("http://foo.localhost.:3000", false)).toThrow(/--allow-localhost/);
-    expect(() => validatePageUrl("http://127.0.0.1:3000", false)).toThrow(/--allow-localhost/);
-    expect(() => validatePageUrl("http://[::1]:3000", false)).toThrow(/--allow-localhost/);
-    expect(() => validatePageUrl("http://[::ffff:127.0.0.1]:3000", false)).toThrow(/--allow-localhost/);
+  it("rejects localhost and loopback by default but allows them with opt-in", async () => {
+    await expect(validatePageUrl("http://localhost:3000", false)).rejects.toThrow(/--allow-localhost/);
+    await expect(validatePageUrl("http://localhost.:3000", false)).rejects.toThrow(/--allow-localhost/);
+    await expect(validatePageUrl("http://foo.localhost:3000", false)).rejects.toThrow(/--allow-localhost/);
+    await expect(validatePageUrl("http://foo.localhost.:3000", false)).rejects.toThrow(/--allow-localhost/);
+    await expect(validatePageUrl("http://127.0.0.1:3000", false)).rejects.toThrow(/--allow-localhost/);
+    await expect(validatePageUrl("http://[::1]:3000", false)).rejects.toThrow(/--allow-localhost/);
+    await expect(validatePageUrl("http://[::ffff:127.0.0.1]:3000", false)).rejects.toThrow(/--allow-localhost/);
 
-    expect(validatePageUrl("http://localhost:3000", true)).toBe("http://localhost:3000/");
-    expect(validatePageUrl("http://localhost.:3000", true)).toBe("http://localhost.:3000/");
-    expect(validatePageUrl("http://foo.localhost:3000", true)).toBe("http://foo.localhost:3000/");
-    expect(validatePageUrl("http://foo.localhost.:3000", true)).toBe("http://foo.localhost.:3000/");
-    expect(validatePageUrl("http://127.0.0.1:3000", true)).toBe("http://127.0.0.1:3000/");
-    expect(validatePageUrl("http://[::1]:3000", true)).toBe("http://[::1]:3000/");
-    expect(validatePageUrl("http://[::ffff:127.0.0.1]:3000", true)).toBe("http://[::ffff:7f00:1]:3000/");
+    await expect(validatePageUrl("http://localhost:3000", true)).resolves.toBe("http://localhost:3000/");
+    await expect(validatePageUrl("http://localhost.:3000", true)).resolves.toBe("http://localhost.:3000/");
+    await expect(validatePageUrl("http://foo.localhost:3000", true)).resolves.toBe("http://foo.localhost:3000/");
+    await expect(validatePageUrl("http://foo.localhost.:3000", true)).resolves.toBe("http://foo.localhost.:3000/");
+    await expect(validatePageUrl("http://127.0.0.1:3000", true)).resolves.toBe("http://127.0.0.1:3000/");
+    await expect(validatePageUrl("http://[::1]:3000", true)).resolves.toBe("http://[::1]:3000/");
+    await expect(validatePageUrl("http://[::ffff:127.0.0.1]:3000", true)).resolves.toBe(
+      "http://[::ffff:7f00:1]:3000/"
+    );
   });
 
-  it("rejects literal private, wildcard, and link-local IPv4 targets", () => {
-    expect(() => validatePageUrl("http://0.0.0.0:3000", false)).toThrow(/Private and loopback IP/);
-    expect(() => validatePageUrl("http://0:3000", false)).toThrow(/Private and loopback IP/);
-    expect(() => validatePageUrl("http://10.0.0.1:3000", false)).toThrow(/Private and loopback IP/);
-    expect(() => validatePageUrl("http://172.16.5.4:3000", false)).toThrow(/Private and loopback IP/);
-    expect(() => validatePageUrl("http://192.168.1.20:3000", false)).toThrow(/Private and loopback IP/);
-    expect(() => validatePageUrl("http://169.254.10.20:3000", false)).toThrow(/Private and loopback IP/);
-    expect(() => validatePageUrl("http://[::ffff:0:0]:3000", false)).toThrow(/Private and loopback IP/);
-    expect(() => validatePageUrl("http://[::ffff:10.0.0.5]:3000", false)).toThrow(/Private and loopback IP/);
-    expect(() => validatePageUrl("http://[::ffff:172.16.5.4]:3000", false)).toThrow(/Private and loopback IP/);
-    expect(() => validatePageUrl("http://[::ffff:192.168.1.20]:3000", false)).toThrow(/Private and loopback IP/);
-    expect(() => validatePageUrl("http://[::ffff:169.254.10.20]:3000", false)).toThrow(/Private and loopback IP/);
+  it("rejects literal private, wildcard, and link-local IPv4 targets", async () => {
+    await expect(validatePageUrl("http://0.0.0.0:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://0:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://10.0.0.1:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://172.16.5.4:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://192.168.1.20:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://169.254.10.20:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://[::ffff:0:0]:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://[::ffff:10.0.0.5]:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://[::ffff:172.16.5.4]:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://[::ffff:192.168.1.20]:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://[::ffff:169.254.10.20]:3000", false)).rejects.toThrow(/Private and loopback IP/);
   });
 
-  it("rejects native IPv6 local and private ranges while allowing public IPv6", () => {
-    expect(() => validatePageUrl("http://[::]:3000", false)).toThrow(/Private and loopback IP/);
-    expect(() => validatePageUrl("http://[fe80::1]:3000", false)).toThrow(/Private and loopback IP/);
-    expect(() => validatePageUrl("http://[fc00::1]:3000", false)).toThrow(/Private and loopback IP/);
-    expect(() => validatePageUrl("http://[fd00::1]:3000", false)).toThrow(/Private and loopback IP/);
-    expect(() => validatePageUrl("http://[fec0::1]:3000", false)).toThrow(/Private and loopback IP/);
+  it("rejects native IPv6 local and private ranges while allowing public IPv6", async () => {
+    await expect(validatePageUrl("http://[::]:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://[fe80::1]:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://[fc00::1]:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://[fd00::1]:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://[fec0::1]:3000", false)).rejects.toThrow(/Private and loopback IP/);
 
-    expect(validatePageUrl("http://[2001:4860:4860::8888]/", false)).toBe("http://[2001:4860:4860::8888]/");
+    await expect(validatePageUrl("http://[2001:4860:4860::8888]/", false)).resolves.toBe(
+      "http://[2001:4860:4860::8888]/"
+    );
+  });
+
+  it("rejects hostnames that resolve to loopback or private addresses", async () => {
+    await expect(validatePageUrl("http://loopback.example:3000", false)).rejects.toThrow(/--allow-localhost/);
+    await expect(validatePageUrl("http://loopback.example:3000", true)).resolves.toBe(
+      "http://loopback.example:3000/"
+    );
+    await expect(validatePageUrl("http://private.example:3000", false)).rejects.toThrow(
+      /Private and loopback IP/
+    );
+    await expect(validatePageUrl("http://mixed.example:3000", false)).rejects.toThrow(
+      /Private and loopback IP/
+    );
+  });
+
+  it("allows hostnames that resolve only to public addresses", async () => {
+    await expect(validatePageUrl("http://public.example:3000", false)).resolves.toBe(
+      "http://public.example:3000/"
+    );
   });
 
   it("parses --allow-localhost only on page commands", () => {
@@ -312,5 +368,34 @@ describe("runtime hardening", () => {
 
     expect(playwrightMocks.newPage).toHaveBeenCalledOnce();
     expect(playwrightMocks.closePage).toHaveBeenCalledOnce();
+  });
+
+  it("serializes browser page operations through a single runtime slot", async () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-runtime-"));
+    tempDirs.push(targetRepo);
+    const runtime = new BrowserRuntime(targetRepo);
+
+    let releaseFirstGoto: (() => void) | undefined;
+    const firstGoto = new Promise<void>((resolve) => {
+      releaseFirstGoto = resolve;
+    });
+
+    playwrightMocks.goto
+      .mockImplementationOnce(() => firstGoto)
+      .mockResolvedValueOnce(undefined);
+
+    const firstCapture = runtime.screenshot("https://example.com", "/tmp/first.png", false);
+    const secondCapture = runtime.snapshot("https://example.com", "/tmp/second.html", false);
+
+    await vi.waitFor(() => {
+      expect(playwrightMocks.newPage).toHaveBeenCalledTimes(1);
+    });
+
+    releaseFirstGoto?.();
+    await firstCapture;
+    await secondCapture;
+
+    expect(playwrightMocks.newPage).toHaveBeenCalledTimes(2);
+    expect(playwrightMocks.closePage).toHaveBeenCalledTimes(2);
   });
 });

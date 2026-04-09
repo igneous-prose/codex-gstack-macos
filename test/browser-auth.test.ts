@@ -290,4 +290,36 @@ describe("browser server auth", () => {
       domains: ["example.com", "foo.com"]
     });
   });
+
+  it("sanitizes unexpected handler failures to a generic 500 response", async () => {
+    const response = await dispatchBrowserRequest(
+      {
+        method: "POST",
+        path: "/page/screenshot",
+        headers: { authorization: "Bearer secret-token" },
+        body: JSON.stringify({
+          url: "https://example.com",
+          outputPath: "/tmp/out.png",
+          allowLocalhost: false
+        })
+      },
+      {
+        port: 0,
+        token: "secret-token",
+        handlers: {
+          screenshot: async () => {
+            throw new Error("sensitive runtime failure");
+          },
+          snapshot: async () => ({ outputPath: "/tmp/out.html" }),
+          listCookieDomains: () => ["example.com"],
+          importCookies: async () => ({ importedCount: 1 })
+        }
+      }
+    );
+
+    expect(response).toEqual({
+      statusCode: 500,
+      body: { error: "Internal server error." }
+    });
+  });
 });

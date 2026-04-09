@@ -379,7 +379,7 @@ export async function dispatchBrowserRequest(
 
     const parsedBody = route.requiresJsonBody ? parseJsonBody(request.body) : undefined;
     const validatedRoute = validateAuthenticatedRoute(route, parsedBody);
-    return dispatchAuthenticatedRoute(validatedRoute, options.handlers);
+    return await dispatchAuthenticatedRoute(validatedRoute, options.handlers);
   } catch (error) {
     if (error instanceof HttpBodyError) {
       return { statusCode: error.statusCode, body: { error: error.message } };
@@ -387,7 +387,7 @@ export async function dispatchBrowserRequest(
     if (error instanceof RequestValidationError) {
       return { statusCode: 400, body: { error: error.message } };
     }
-    throw error;
+    return { statusCode: 500, body: { error: "Internal server error." } };
   }
 }
 
@@ -440,8 +440,7 @@ export async function startBrowserServer(options: BrowserServerOptions): Promise
         writeJson(response, 400, { error: error.message });
         return;
       }
-      const message = error instanceof Error ? error.message : "Unknown error";
-      writeJson(response, 500, { error: message });
+      writeJson(response, 500, { error: "Internal server error." });
     }
   });
 
