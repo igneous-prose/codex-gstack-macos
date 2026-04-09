@@ -28,7 +28,7 @@ describe("browser server auth", () => {
       {
         method: "POST",
         path: "/page/screenshot",
-        body: JSON.stringify({ url: "https://example.com", outputPath: "/tmp/out.png", allowLocalhost: false })
+        body: "{"
       },
       {
         port: 0,
@@ -43,8 +43,9 @@ describe("browser server auth", () => {
   it("rejects invalid auth tokens", async () => {
     const response = await dispatchBrowserRequest(
       {
-        method: "GET",
-        path: "/cookies/domains?browser=chrome",
+        method: "POST",
+        path: "/page/screenshot",
+        body: "{",
         headers: { authorization: "Bearer wrong-token" }
       },
       {
@@ -59,5 +60,30 @@ describe("browser server auth", () => {
       }
     );
     expect(response.statusCode).toBe(403);
+  });
+
+  it("returns not found before auth or JSON parsing for unknown routes", async () => {
+    const response = await dispatchBrowserRequest(
+      {
+        method: "POST",
+        path: "/unknown",
+        body: "{"
+      },
+      {
+        port: 0,
+        token: "secret-token",
+        handlers: {
+          screenshot: async () => ({ outputPath: "/tmp/out.png" }),
+          snapshot: async () => ({ outputPath: "/tmp/out.html" }),
+          listCookieDomains: () => ["example.com"],
+          importCookies: async () => ({ importedCount: 1 })
+        }
+      }
+    );
+
+    expect(response).toEqual({
+      statusCode: 404,
+      body: { error: "Not found." }
+    });
   });
 });

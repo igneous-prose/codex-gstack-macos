@@ -5,6 +5,7 @@ This summary reflects the current hardening state of `codex-gstack-macos`.
 ## Current boundaries
 
 - Browser daemon binds to `127.0.0.1` only and requires a bearer token for command routes.
+- Command routes authenticate before JSON request bodies are parsed and enforce a `64 KiB` body limit.
 - Runtime state lives only under `.codex-gstack/` and is treated as owner-only local state.
 - Normal daemon status output redacts the token; explicit token disclosure requires a separate local command.
 - Browser output writes are restricted to the target repo root and `/tmp`.

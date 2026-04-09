@@ -42,18 +42,157 @@ export interface DispatchResponse {
   readonly body: unknown;
 }
 
+export const MAX_JSON_BODY_BYTES = 64 * 1024;
+
+type ClassifiedRoute =
+  | {
+      readonly kind: "health";
+      readonly requiresAuth: false;
+      readonly requiresJsonBody: false;
+    }
+  | {
+      readonly kind: "page-screenshot" | "page-snapshot" | "cookies-import";
+      readonly requiresAuth: true;
+      readonly requiresJsonBody: true;
+    }
+  | {
+      readonly kind: "cookies-domains";
+      readonly requiresAuth: true;
+      readonly requiresJsonBody: false;
+      readonly browser: string | null;
+    }
+  | {
+      readonly kind: "not-found";
+      readonly requiresAuth: false;
+      readonly requiresJsonBody: false;
+    };
+
+class HttpBodyError extends Error {
+  constructor(
+    readonly statusCode: number,
+    message: string
+  ) {
+    super(message);
+    this.name = "HttpBodyError";
+  }
+}
+
 function writeJson(response: ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(`${JSON.stringify(body)}\n`);
 }
 
-async function readJson<T>(request: IncomingMessage): Promise<T> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.from(chunk));
+function classifyRoute(
+  method: string,
+  path: string,
+  host: string,
+  port: number
+): ClassifiedRoute {
+  const requestUrl = new URL(path, `http://${host}:${port}`);
+
+  if (requestUrl.pathname === "/health" && method === "GET") {
+    return {
+      kind: "health",
+      requiresAuth: false,
+      requiresJsonBody: false
+    };
   }
-  const rawBody = Buffer.concat(chunks).toString("utf8");
-  return JSON.parse(rawBody) as T;
+
+  if (requestUrl.pathname === "/page/screenshot" && method === "POST") {
+    return {
+      kind: "page-screenshot",
+      requiresAuth: true,
+      requiresJsonBody: true
+    };
+  }
+
+  if (requestUrl.pathname === "/page/snapshot" && method === "POST") {
+    return {
+      kind: "page-snapshot",
+      requiresAuth: true,
+      requiresJsonBody: true
+    };
+  }
+
+  if (requestUrl.pathname === "/cookies/domains" && method === "GET") {
+    return {
+      kind: "cookies-domains",
+      requiresAuth: true,
+      requiresJsonBody: false,
+      browser: requestUrl.searchParams.get("browser")
+    };
+  }
+
+  if (requestUrl.pathname === "/cookies/import" && method === "POST") {
+    return {
+      kind: "cookies-import",
+      requiresAuth: true,
+      requiresJsonBody: true
+    };
+  }
+
+  return {
+    kind: "not-found",
+    requiresAuth: false,
+    requiresJsonBody: false
+  };
+}
+
+function parseJsonBody<T>(rawBody: string | undefined): T {
+  try {
+    return JSON.parse(rawBody ?? "{}") as T;
+  } catch {
+    throw new HttpBodyError(400, "Malformed JSON body.");
+  }
+}
+
+async function readJsonWithLimit<T>(request: IncomingMessage): Promise<T> {
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  for await (const chunk of request) {
+    const bufferChunk = Buffer.from(chunk);
+    totalBytes += bufferChunk.byteLength;
+    if (totalBytes > MAX_JSON_BODY_BYTES) {
+      throw new HttpBodyError(413, `JSON body exceeds ${MAX_JSON_BODY_BYTES} bytes.`);
+    }
+    chunks.push(bufferChunk);
+  }
+  return parseJsonBody<T>(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function dispatchAuthenticatedRoute(
+  route: Exclude<ClassifiedRoute, { kind: "health" | "not-found" }>,
+  parsedBody: unknown,
+  handlers: BrowserServerHandlers
+): Promise<DispatchResponse> {
+  if (route.kind === "page-screenshot") {
+    return {
+      statusCode: 200,
+      body: await handlers.screenshot(parsedBody as PageCommandPayload)
+    };
+  }
+
+  if (route.kind === "page-snapshot") {
+    return {
+      statusCode: 200,
+      body: await handlers.snapshot(parsedBody as PageCommandPayload)
+    };
+  }
+
+  if (route.kind === "cookies-domains") {
+    if (!route.browser) {
+      return { statusCode: 400, body: { error: "browser query parameter is required." } };
+    }
+    return {
+      statusCode: 200,
+      body: { domains: handlers.listCookieDomains(route.browser as SupportedCookieBrowser) }
+    };
+  }
+
+  return {
+    statusCode: 200,
+    body: await handlers.importCookies(parsedBody as CookieImportPayload)
+  };
 }
 
 function authError(
@@ -78,10 +217,14 @@ export async function dispatchBrowserRequest(
   options: BrowserServerOptions
 ): Promise<DispatchResponse> {
   const host = options.host ?? DEFAULT_HOST;
-  const requestUrl = new URL(request.path, `http://${host}:${options.port}`);
+  const route = classifyRoute(request.method, request.path, host, options.port);
 
-  if (requestUrl.pathname === "/health" && request.method === "GET") {
+  if (route.kind === "health") {
     return { statusCode: 200, body: { ok: true, host } };
+  }
+
+  if (route.kind === "not-found") {
+    return { statusCode: 404, body: { error: "Not found." } };
   }
 
   const authFailure = authError(request.headers, options.token);
@@ -89,39 +232,8 @@ export async function dispatchBrowserRequest(
     return authFailure;
   }
 
-  if (requestUrl.pathname === "/page/screenshot" && request.method === "POST") {
-    return {
-      statusCode: 200,
-      body: await options.handlers.screenshot(JSON.parse(request.body ?? "{}") as PageCommandPayload)
-    };
-  }
-
-  if (requestUrl.pathname === "/page/snapshot" && request.method === "POST") {
-    return {
-      statusCode: 200,
-      body: await options.handlers.snapshot(JSON.parse(request.body ?? "{}") as PageCommandPayload)
-    };
-  }
-
-  if (requestUrl.pathname === "/cookies/domains" && request.method === "GET") {
-    const browser = requestUrl.searchParams.get("browser");
-    if (!browser) {
-      return { statusCode: 400, body: { error: "browser query parameter is required." } };
-    }
-    return {
-      statusCode: 200,
-      body: { domains: options.handlers.listCookieDomains(browser as SupportedCookieBrowser) }
-    };
-  }
-
-  if (requestUrl.pathname === "/cookies/import" && request.method === "POST") {
-    return {
-      statusCode: 200,
-      body: await options.handlers.importCookies(JSON.parse(request.body ?? "{}") as CookieImportPayload)
-    };
-  }
-
-  return { statusCode: 404, body: { error: "Not found." } };
+  const parsedBody = route.requiresJsonBody ? parseJsonBody(request.body) : undefined;
+  return dispatchAuthenticatedRoute(route, parsedBody, options.handlers);
 }
 
 export async function startBrowserServer(options: BrowserServerOptions): Promise<{
@@ -134,24 +246,40 @@ export async function startBrowserServer(options: BrowserServerOptions): Promise
   const server = createServer(async (request, response) => {
     try {
       const method = request.method?.toUpperCase() ?? "GET";
-      const body =
-        method === "POST" || method === "PUT" || method === "PATCH"
-          ? JSON.stringify(await readJson<unknown>(request))
-          : undefined;
-      const dispatchRequest: DispatchRequest = {
-        method,
-        path: request.url ?? "/",
-        headers: {
+      const path = request.url ?? "/";
+      const route = classifyRoute(method, path, host, options.port);
+
+      if (route.kind === "health") {
+        writeJson(response, 200, { ok: true, host });
+        return;
+      }
+
+      if (route.kind === "not-found") {
+        writeJson(response, 404, { error: "Not found." });
+        return;
+      }
+
+      const authFailure = authError(
+        {
           authorization: request.headers.authorization
         },
-        ...(body !== undefined ? { body } : {})
-      };
-      const dispatchResponse = await dispatchBrowserRequest(
-        dispatchRequest,
-        options
+        options.token
       );
+      if (authFailure) {
+        writeJson(response, authFailure.statusCode, authFailure.body);
+        return;
+      }
+
+      const parsedBody = route.requiresJsonBody
+        ? await readJsonWithLimit<unknown>(request)
+        : undefined;
+      const dispatchResponse = await dispatchAuthenticatedRoute(route, parsedBody, options.handlers);
       writeJson(response, dispatchResponse.statusCode, dispatchResponse.body);
     } catch (error) {
+      if (error instanceof HttpBodyError) {
+        writeJson(response, error.statusCode, { error: error.message });
+        return;
+      }
       const message = error instanceof Error ? error.message : "Unknown error";
       writeJson(response, 500, { error: message });
     }
