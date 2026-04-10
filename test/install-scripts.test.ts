@@ -128,6 +128,23 @@ describe("install-repo-local.sh", () => {
     execFileSync("git", ["-C", tempSourceRepo, "remote", "set-url", "origin", bareRemoteRepo], {
       cwd: repoRoot
     });
+    const tempSourceHead = execFileSync("git", ["-C", tempSourceRepo, "rev-parse", "HEAD"], {
+      cwd: repoRoot
+    })
+      .toString()
+      .trim();
+    execFileSync("git", ["-C", bareRemoteRepo, "update-ref", "refs/heads/ci-update-local-test", tempSourceHead], {
+      cwd: repoRoot
+    });
+    execFileSync("git", ["-C", tempSourceRepo, "fetch", "origin", "ci-update-local-test"], {
+      cwd: repoRoot
+    });
+    execFileSync("git", ["-C", tempSourceRepo, "checkout", "-B", "ci-update-local-test"], {
+      cwd: repoRoot
+    });
+    execFileSync("git", ["-C", tempSourceRepo, "branch", "--set-upstream-to=origin/ci-update-local-test", "ci-update-local-test"], {
+      cwd: repoRoot
+    });
 
     writeFileSync(
       path.join(tempSourceRepo, "scripts", "bootstrap-macos.sh"),
