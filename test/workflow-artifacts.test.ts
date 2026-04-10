@@ -121,6 +121,97 @@ describe("workflow artifacts", () => {
     ).toContain("\"status\": \"briefed\"");
   });
 
+  it("ignores poisoned latest workflow state with an invalid initiative id", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-poisoned-state-"));
+    tempDirs.push(targetRepo);
+
+    const latestStatePath = ensureWorkflowLayout(targetRepo).latestStatePath;
+    writeFileSync(
+      latestStatePath,
+      `${JSON.stringify(
+        {
+          initiativeId: "../../../../tmp/escape",
+          title: "Poisoned",
+          status: "planned",
+          planPath: "/tmp/escape/plan.md",
+          updatedAt: "2026-04-09T10:00:00.000Z"
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    expect(readLatestWorkflowState(targetRepo)).toBeNull();
+    expect(buildReviewContextSnapshot(targetRepo).fallbackMessage).toBe(
+      "No active plan found. Fall back to branch-only review."
+    );
+    expect(buildQaContextSnapshot(targetRepo).fallbackMessage).toBe(
+      "No active plan found. Fall back to installation and branch-only QA."
+    );
+  });
+
+  it("recomputes stored workflow artifact paths from a valid initiative id", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-canonical-state-"));
+    const externalRoot = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-external-state-"));
+    tempDirs.push(targetRepo, externalRoot);
+
+    const initiativeId = "20260409-100000-daily-briefing-app";
+    const workflowPaths = ensureWorkflowLayout(targetRepo, initiativeId);
+    const externalPlanPath = path.join(externalRoot, "plan.md");
+    const canonicalPlanMarkdown = `# Plan: Daily Briefing App
+
+## Implementation Plan
+
+1. Use the canonical plan inside the repo.
+
+## Acceptance Criteria
+
+- Validate the canonical plan path.
+
+## QA Targets
+
+- Check the canonical plan path first.`;
+    writeFileSync(workflowPaths.planPath, canonicalPlanMarkdown, "utf8");
+    writeFileSync(externalPlanPath, "## Implementation Plan\n\n- external\n", "utf8");
+    writeFileSync(
+      workflowPaths.latestStatePath,
+      `${JSON.stringify(
+        {
+          initiativeId,
+          title: "Daily Briefing App",
+          status: "planned",
+          briefPath: path.join(externalRoot, "brief.md"),
+          planPath: externalPlanPath,
+          retroPath: path.join(externalRoot, "retro.md"),
+          updatedAt: "2026-04-09T10:00:00.000Z"
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const latestState = readLatestWorkflowState(targetRepo);
+    expect(latestState?.briefPath).toBe(workflowPaths.briefPath);
+    expect(latestState?.planPath).toBe(workflowPaths.planPath);
+    expect(latestState?.retroPath).toBe(workflowPaths.retroPath);
+
+    const reviewContext = buildReviewContextSnapshot(targetRepo);
+    expect(reviewContext.fallbackMessage).toBeNull();
+    expect(reviewContext.planPath).toBe(workflowPaths.planPath);
+    expect(reviewContext.implementationChecklist).toContain("Use the canonical plan inside the repo.");
+  });
+
+  it("rejects initiative ids that are not safe slugs", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-invalid-initiative-"));
+    tempDirs.push(targetRepo);
+
+    expect(() => getWorkflowPaths(targetRepo, "../../../../tmp/escape")).toThrow(
+      'Invalid initiative id "../../../../tmp/escape"'
+    );
+  });
+
   it("updates stable plan sections without rebuilding the whole document", () => {
     const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-plan-doc-"));
     tempDirs.push(targetRepo);

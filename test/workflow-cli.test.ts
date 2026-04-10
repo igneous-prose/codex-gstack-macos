@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -235,6 +235,22 @@ describe("workflow cli", () => {
     expect(Array.isArray(autoplan.unresolvedTasteDecisions)).toBe(true);
   });
 
+  it("rejects traversal initiative ids passed to autoplan", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-autoplan-traversal-"));
+    tempDirs.push(targetRepo);
+
+    expect(() =>
+      runWorkflowScript("workflow:autoplan", [
+        "--repo",
+        targetRepo,
+        "--initiative-id",
+        "../../../../tmp/escape",
+        "--input",
+        "Plan a migration"
+      ])
+    ).toThrow('Invalid initiative id "../../../../tmp/escape"');
+  });
+
   it("lets independent plan reviews update targeted sections", () => {
     const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-plan-review-"));
     tempDirs.push(targetRepo);
@@ -343,6 +359,34 @@ describe("workflow cli", () => {
     expect(shipContext.fallbackMessage).toBe(
       "No active plan found. Fall back to the existing codex-gstack-ship skill handoff."
     );
+  });
+
+  it("falls back cleanly when latest workflow state is poisoned", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-review-poisoned-"));
+    const externalRoot = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-review-poisoned-external-"));
+    tempDirs.push(targetRepo, externalRoot);
+
+    mkdirSync(path.join(targetRepo, ".codex-gstack", "workflow"), { recursive: true });
+    writeFileSync(path.join(externalRoot, "plan.md"), "## Implementation Plan\n\n- external\n", "utf8");
+    writeFileSync(
+      path.join(targetRepo, ".codex-gstack", "workflow", "latest.json"),
+      `${JSON.stringify(
+        {
+          initiativeId: "../../../../tmp/escape",
+          title: "Poisoned",
+          status: "planned",
+          planPath: path.join(externalRoot, "plan.md"),
+          updatedAt: "2026-04-09T10:00:00.000Z"
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const reviewContext = runWorkflowScript("workflow:review", ["--repo", targetRepo]);
+    expect(reviewContext.fallbackMessage).toBe("No active plan found. Fall back to branch-only review.");
+    expect(reviewContext.planPath).toBeNull();
   });
 
   it("writes retro learnings and reuses them in the next brief", () => {
