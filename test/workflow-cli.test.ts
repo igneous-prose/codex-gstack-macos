@@ -63,6 +63,54 @@ describe("workflow cli", () => {
     );
   });
 
+  it("dispatches repo-local planning requests to repo-local wrappers", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-repo-local-route-"));
+    tempDirs.push(targetRepo);
+
+    execFileSync(
+      "/bin/bash",
+      [path.join(repoRoot, "scripts", "bootstrap-repo.sh"), "required", targetRepo, "--install-mode", "repo-local"],
+      {
+        cwd: repoRoot
+      }
+    );
+
+    const result = runWorkflowScript("workflow:dispatch", [
+      "--repo",
+      targetRepo,
+      "--input",
+      "Help me plan this dashboard redesign"
+    ]);
+
+    expect(result.route).toBe("autoplan");
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.suggestedCommand).toBe("./.codex-gstack/bin/gstack-workflow-autoplan");
+  });
+
+  it("dispatches repo-local ship requests to repo-local wrappers", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-repo-local-ship-route-"));
+    tempDirs.push(targetRepo);
+
+    execFileSync(
+      "/bin/bash",
+      [path.join(repoRoot, "scripts", "bootstrap-repo.sh"), "required", targetRepo, "--install-mode", "repo-local"],
+      {
+        cwd: repoRoot
+      }
+    );
+
+    const result = runWorkflowScript("workflow:dispatch", [
+      "--repo",
+      targetRepo,
+      "--input",
+      "Open PR for this branch"
+    ]);
+
+    expect(result.route).toBe("ship");
+    expect(result.suggestedSkill).toBe("codex-gstack-ship");
+    expect(result.suggestedCommand).toBe("./.codex-gstack/bin/gstack-workflow-ship");
+  });
+
   it("dispatches ship requests to the installed ship wrapper", { timeout: 20000 }, () => {
     const fakeHome = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-home-"));
     const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-ship-route-"));
@@ -84,7 +132,7 @@ describe("workflow cli", () => {
 
     expect(result.route).toBe("ship");
     expect(result.suggestedSkill).toBe("codex-gstack-ship");
-    expect(String(result.suggestedCommand)).toContain("gstack-workflow-ship");
+    expect(result.suggestedCommand).toBe(path.join(fakeHome, ".codex", "gstack-macos", "bin", "gstack-workflow-ship"));
     expect(String(result.suggestedNpmScript)).toContain("npm run workflow:ship -- --repo ");
     expect(String(result.suggestedNpmScript)).toContain(path.basename(targetRepo));
   });

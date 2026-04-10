@@ -94,6 +94,7 @@ export interface RouterStateRecord {
 export interface TeamBootstrapRecord {
   readonly host: "codex";
   readonly mode: "required" | "optional";
+  readonly installMode: "global" | "repo-local";
   readonly bootstrappedAt: string;
 }
 

@@ -94,6 +94,7 @@ describe("workflow artifacts", () => {
     writeTeamBootstrapRecord(targetRepo, {
       host: "codex",
       mode: "required",
+      installMode: "global",
       bootstrappedAt: "2026-04-09T10:00:00.000Z"
     });
     appendProjectLearnings(targetRepo, [
