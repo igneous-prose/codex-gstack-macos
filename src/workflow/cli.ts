@@ -51,8 +51,8 @@ function getWorkflowWrapperPath(command: string): string {
   return path.join(homeDir, ".codex", "gstack-macos", "bin", command);
 }
 
-function getRepoLocalWorkflowWrapperPath(command: string): string {
-  return `./.codex-gstack/bin/${command}`;
+function getRepoLocalWorkflowWrapperPath(repoRoot: string, command: string): string {
+  return path.join(repoRoot, ".codex-gstack", "bin", command);
 }
 
 function resolveSuggestedCommand(route: WorkflowRouteKind, repoRoot: string): string | null {
@@ -63,7 +63,7 @@ function resolveSuggestedCommand(route: WorkflowRouteKind, repoRoot: string): st
   const command = `gstack-workflow-${ROUTE_WORKFLOW_COMMANDS[route]}`;
   const installMode = readTeamBootstrapRecord(repoRoot)?.installMode;
   if (installMode === "repo-local") {
-    return getRepoLocalWorkflowWrapperPath(command);
+    return getRepoLocalWorkflowWrapperPath(repoRoot, command);
   }
   return getWorkflowWrapperPath(command);
 }
