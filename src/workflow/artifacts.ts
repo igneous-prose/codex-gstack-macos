@@ -170,6 +170,27 @@ function assertValidInitiativeId(initiativeId: string): void {
   }
 }
 
+function normalizeLatestWorkflowState(
+  repoRoot: string,
+  state: LatestWorkflowState | null
+): LatestWorkflowState | null {
+  if (!state) {
+    return null;
+  }
+
+  try {
+    const workflowPaths = getWorkflowPaths(repoRoot, state.initiativeId);
+    return {
+      ...state,
+      ...(state.briefPath !== undefined ? { briefPath: workflowPaths.briefPath } : {}),
+      ...(state.planPath !== undefined ? { planPath: workflowPaths.planPath } : {}),
+      ...(state.retroPath !== undefined ? { retroPath: workflowPaths.retroPath } : {})
+    };
+  } catch {
+    return null;
+  }
+}
+
 function titleCase(words: string[]): string {
   return words
     .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
@@ -642,7 +663,10 @@ export function writeLatestWorkflowState(repoRoot: string, state: LatestWorkflow
 
 export function readLatestWorkflowState(repoRoot: string): LatestWorkflowState | null {
   const workflowPaths = ensureWorkflowLayout(repoRoot);
-  return readJsonFile<LatestWorkflowState>(workflowPaths.latestStatePath);
+  return normalizeLatestWorkflowState(
+    repoRoot,
+    readJsonFile<LatestWorkflowState>(workflowPaths.latestStatePath)
+  );
 }
 
 export function writeRouterState(repoRoot: string, state: RouterStateRecord): void {
