@@ -557,6 +557,8 @@ describe("runtime hardening", () => {
     await expect(validatePageUrl("http://127.0.0.1:3000", false)).rejects.toThrow(/--allow-localhost/);
     await expect(validatePageUrl("http://[::1]:3000", false)).rejects.toThrow(/--allow-localhost/);
     await expect(validatePageUrl("http://[::ffff:127.0.0.1]:3000", false)).rejects.toThrow(/--allow-localhost/);
+    await expect(validatePageUrl("http://[::127.0.0.1]:3000", false)).rejects.toThrow(/--allow-localhost/);
+    await expect(validatePageUrl("http://[::7f00:1]:3000", false)).rejects.toThrow(/--allow-localhost/);
 
     await expect(validatePageUrl("http://localhost:3000", true)).resolves.toBe("http://localhost:3000/");
     await expect(validatePageUrl("http://localhost.:3000", true)).resolves.toBe("http://localhost.:3000/");
@@ -567,6 +569,10 @@ describe("runtime hardening", () => {
     await expect(validatePageUrl("http://[::ffff:127.0.0.1]:3000", true)).resolves.toBe(
       "http://[::ffff:7f00:1]:3000/"
     );
+    await expect(validatePageUrl("http://[::127.0.0.1]:3000", true)).resolves.toBe(
+      "http://[::7f00:1]:3000/"
+    );
+    await expect(validatePageUrl("http://[::7f00:1]:3000", true)).resolves.toBe("http://[::7f00:1]:3000/");
   });
 
   it("rejects literal private, wildcard, and link-local IPv4 targets", async () => {
@@ -581,6 +587,8 @@ describe("runtime hardening", () => {
     await expect(validatePageUrl("http://[::ffff:172.16.5.4]:3000", false)).rejects.toThrow(/Private and loopback IP/);
     await expect(validatePageUrl("http://[::ffff:192.168.1.20]:3000", false)).rejects.toThrow(/Private and loopback IP/);
     await expect(validatePageUrl("http://[::ffff:169.254.10.20]:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://[::10.0.0.5]:3000", false)).rejects.toThrow(/Private and loopback IP/);
+    await expect(validatePageUrl("http://[::c0a8:114]:3000", false)).rejects.toThrow(/Private and loopback IP/);
   });
 
   it("rejects native IPv6 local and private ranges while allowing public IPv6", async () => {

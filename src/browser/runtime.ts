@@ -138,30 +138,67 @@ function isBlockedPrivateIpv6(host: string): boolean {
   return false;
 }
 
-function parseMappedIpv4FromIpv6(host: string): string | null {
+function parseIpv6Hextets(host: string): number[] | null {
   const normalizedHost = normalizeHostLiteral(host);
-  if (!normalizedHost.startsWith("::ffff:")) {
+  if (isIP(normalizedHost) !== 6) {
     return null;
   }
 
-  const suffix = normalizedHost.slice("::ffff:".length);
-  if (isIpv4Address(suffix)) {
-    return suffix;
-  }
-
-  const hexParts = suffix.split(":");
-  if (hexParts.length !== 2 || !hexParts.every((part) => /^[0-9a-f]{1,4}$/i.test(part))) {
+  const [rawHead, rawTail] = normalizedHost.split("::");
+  if (normalizedHost.split("::").length > 2) {
     return null;
   }
 
-  const highPart = hexParts[0];
-  const lowPart = hexParts[1];
-  if (highPart === undefined || lowPart === undefined) {
+  const parsePart = (part: string): number[] | null => {
+    if (part.length === 0) {
+      return [];
+    }
+    const chunks = part.split(":");
+    const parsed: number[] = [];
+    for (const chunk of chunks) {
+      if (chunk.includes(".")) {
+        if (!isIpv4Address(chunk)) {
+          return null;
+        }
+        const octets = chunk.split(".").map((octet) => Number.parseInt(octet, 10));
+        const [a, b, c, d] = octets;
+        if (a === undefined || b === undefined || c === undefined || d === undefined) {
+          return null;
+        }
+        parsed.push((a << 8) | b, (c << 8) | d);
+        continue;
+      }
+
+      if (!/^[0-9a-f]{1,4}$/i.test(chunk)) {
+        return null;
+      }
+      parsed.push(Number.parseInt(chunk, 16));
+    }
+    return parsed;
+  };
+
+  const head = parsePart(rawHead ?? "");
+  const tail = parsePart(rawTail ?? "");
+  if (head === null || tail === null) {
     return null;
   }
 
-  const high = Number.parseInt(highPart, 16);
-  const low = Number.parseInt(lowPart, 16);
+  if (rawTail === undefined) {
+    if (head.length !== 8) {
+      return null;
+    }
+    return head;
+  }
+
+  const missingCount = 8 - (head.length + tail.length);
+  if (missingCount < 1) {
+    return null;
+  }
+
+  return [...head, ...new Array<number>(missingCount).fill(0), ...tail];
+}
+
+function hextetPairToIpv4(high: number, low: number): string {
   return [
     (high >> 8) & 0xff,
     high & 0xff,
@@ -170,17 +207,59 @@ function parseMappedIpv4FromIpv6(host: string): string | null {
   ].join(".");
 }
 
+function parseMappedIpv4FromIpv6(host: string): string | null {
+  const hextets = parseIpv6Hextets(host);
+  if (hextets === null) {
+    return null;
+  }
+
+  if (!hextets.slice(0, 5).every((hextet) => hextet === 0) || hextets[5] !== 0xffff) {
+    return null;
+  }
+
+  const high = hextets[6];
+  const low = hextets[7];
+  if (high === undefined || low === undefined) {
+    return null;
+  }
+
+  return hextetPairToIpv4(high, low);
+}
+
+function parseCompatibleIpv4FromIpv6(host: string): string | null {
+  const hextets = parseIpv6Hextets(host);
+  if (hextets === null) {
+    return null;
+  }
+
+  if (!hextets.slice(0, 6).every((hextet) => hextet === 0)) {
+    return null;
+  }
+
+  const high = hextets[6];
+  const low = hextets[7];
+  if (high === undefined || low === undefined) {
+    return null;
+  }
+
+  return hextetPairToIpv4(high, low);
+}
+
+function parseEmbeddedIpv4FromIpv6(host: string): string | null {
+  return parseMappedIpv4FromIpv6(host) ?? parseCompatibleIpv4FromIpv6(host);
+}
+
 function classifyResolvedAddress(address: string): "loopback" | "private" | "public" {
   if (isLocalhostHost(address)) {
     return "loopback";
   }
 
-  const mappedIpv4 = parseMappedIpv4FromIpv6(address);
-  if (mappedIpv4) {
-    if (isLocalhostHost(mappedIpv4)) {
+  const embeddedIpv4 = parseEmbeddedIpv4FromIpv6(address);
+  if (embeddedIpv4) {
+    if (isLocalhostHost(embeddedIpv4)) {
       return "loopback";
     }
-    if (isBlockedPrivateIpv4(mappedIpv4)) {
+    if (isBlockedPrivateIpv4(embeddedIpv4)) {
       return "private";
     }
     return "public";
@@ -261,16 +340,16 @@ async function validatePageUrl(
     return parsedUrl.toString();
   }
 
-  const mappedIpv4 = parseMappedIpv4FromIpv6(host);
-  if (mappedIpv4) {
-    if (isLocalhostHost(mappedIpv4)) {
+  const embeddedIpv4 = parseEmbeddedIpv4FromIpv6(host);
+  if (embeddedIpv4) {
+    if (isLocalhostHost(embeddedIpv4)) {
       if (!allowLocalhost) {
         throw new Error("Localhost targets require --allow-localhost for local dev verification.");
       }
       return parsedUrl.toString();
     }
 
-    if (isBlockedPrivateIpv4(mappedIpv4)) {
+    if (isBlockedPrivateIpv4(embeddedIpv4)) {
       throw new Error("Private and loopback IP targets are blocked.");
     }
   }
