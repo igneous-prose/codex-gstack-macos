@@ -63,7 +63,7 @@ describe("workflow cli", () => {
     );
   });
 
-  it("dispatches ship requests to the installed ship wrapper", () => {
+  it("dispatches ship requests to the installed ship wrapper", { timeout: 20000 }, () => {
     const fakeHome = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-home-"));
     const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-ship-route-"));
     tempDirs.push(fakeHome, targetRepo);

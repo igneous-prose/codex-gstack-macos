@@ -12,8 +12,6 @@ Use this skill to prepare a local change for GitHub.
 ## Commands
 
 ```bash
-if [[ -x "$HOME/.codex/gstack-macos/bin/gstack-workflow-ship" ]]; then
-  "$HOME/.codex/gstack-macos/bin/gstack-workflow-ship" --repo /path/to/target-repo
-fi
+"$HOME/.codex/gstack-macos/bin/gstack-workflow-ship" --repo /path/to/target-repo
 bash scripts/configure-github.sh --repo igneous-prose/codex-gstack-macos
 ```

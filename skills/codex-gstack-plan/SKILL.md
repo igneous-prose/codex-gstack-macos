@@ -1,6 +1,6 @@
 # codex-gstack-plan
 
-Use this skill as a compatibility alias for the newer Codex-first planning flow.
+Use this skill to keep the Codex-first planning flow pointed at the current brief and plan artifacts.
 
 ## Workflow
 

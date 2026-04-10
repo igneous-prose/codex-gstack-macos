@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -56,12 +55,7 @@ function resolveSuggestedCommand(route: WorkflowRouteKind): string | null {
     return null;
   }
 
-  const wrapperPath = getWorkflowWrapperPath(`gstack-workflow-${ROUTE_WORKFLOW_COMMANDS[route]}`);
-  if (route === "ship" && !existsSync(wrapperPath)) {
-    return null;
-  }
-
-  return wrapperPath;
+  return getWorkflowWrapperPath(`gstack-workflow-${ROUTE_WORKFLOW_COMMANDS[route]}`);
 }
 
 function resolveSuggestedNpmScript(route: WorkflowRouteKind, repoRoot: string): string | null {

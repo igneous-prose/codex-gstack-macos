@@ -7,7 +7,7 @@
 - Supported hosts: Codex CLI and Codex app only
 - Supported platform: Apple Silicon macOS only
 - Repository visibility does not change the runtime exposure: the tool remains local-only even if the repo is public
-- Repo-local install first via `.agents/skills/*`
+- Two supported install modes: global Codex setup or repo-local self-contained install
 - Runtime state only under `.codex-gstack/` inside the target repo
 - Tracked workflow artifacts under `docs/gstack/` inside the target repo
 - No Claude integration
@@ -17,11 +17,21 @@
 
 ## Quick Start
 
+### Global Codex Setup
+
 ```bash
 bash scripts/bootstrap-macos.sh
 bash scripts/setup.sh --host codex
-bash scripts/bootstrap-repo.sh required /path/to/target-repo
+bash scripts/bootstrap-repo.sh required /path/to/target-repo --install-mode global
+bash scripts/doctor.sh /path/to/target-repo
+```
+
+### Repo-Local Install
+
+```bash
+bash scripts/bootstrap-macos.sh
 bash scripts/install-repo-local.sh /path/to/target-repo
+bash scripts/bootstrap-repo.sh required /path/to/target-repo --install-mode repo-local
 bash scripts/doctor.sh /path/to/target-repo
 ```
 
@@ -32,6 +42,7 @@ bash scripts/doctor.sh /path/to/target-repo
 - Use `codex-gstack-autoplan` to produce `docs/gstack/<initiative-id>/plan.md`
 - Use `codex-gstack-retro` to write `docs/gstack/<initiative-id>/retro.md` and update `.codex-gstack/workflow/learnings.json`
 - Multi-step routes such as `codex-gstack-autoplan` should ask for confirmation before running
+- Fresh `office-hours` runs allocate a new timestamped initiative id each time
 
 ## Browser Commands
 

@@ -22,6 +22,24 @@ git pull --ff-only
 bash scripts/bootstrap-macos.sh
 
 if [[ -n "$target_repo" ]]; then
-  bash scripts/install-repo-local.sh "$target_repo"
-fi
+  bootstrap_mode="required"
+  team_bootstrap_path="$target_repo/.codex-gstack/workflow/team-bootstrap.json"
 
+  if [[ -f "$team_bootstrap_path" ]]; then
+    bootstrap_mode="$(
+      node -e '
+const fs = require("node:fs");
+const targetPath = process.argv[1];
+const record = JSON.parse(fs.readFileSync(targetPath, "utf8"));
+if (record.mode !== "required" && record.mode !== "optional") {
+  console.error(`Unsupported bootstrap mode in ${targetPath}: ${record.mode}`);
+  process.exit(1);
+}
+process.stdout.write(record.mode);
+' "$team_bootstrap_path"
+    )"
+  fi
+
+  bash scripts/install-repo-local.sh "$target_repo"
+  bash scripts/bootstrap-repo.sh "$bootstrap_mode" "$target_repo" --install-mode repo-local
+fi
