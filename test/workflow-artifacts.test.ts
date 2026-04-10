@@ -9,6 +9,7 @@ import {
   PRIVATE_FILE_MODE
 } from "../src/browser/config.js";
 import {
+  allocateInitiativeId,
   applyBriefSnapshotSection,
   applyCeoReview,
   applyEngReview,
@@ -48,17 +49,34 @@ describe("workflow artifacts", () => {
       "I Want To Build A Daily Briefing App"
     );
     expect(buildInitiativeId("Daily Briefing App", new Date("2026-04-09T10:00:00.000Z"))).toBe(
-      "20260409-daily-briefing-app"
+      "20260409-100000-daily-briefing-app"
     );
+  });
+
+  it("allocates unique initiative ids when the same title repeats", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-initiative-id-"));
+    tempDirs.push(targetRepo);
+
+    const firstInitiativeId = allocateInitiativeId(targetRepo, "Daily Briefing App", new Date("2026-04-09T10:00:00.000Z"));
+    ensureWorkflowLayout(targetRepo, firstInitiativeId);
+
+    const secondInitiativeId = allocateInitiativeId(
+      targetRepo,
+      "Daily Briefing App",
+      new Date("2026-04-09T10:00:00.000Z")
+    );
+
+    expect(firstInitiativeId).toBe("20260409-100000-daily-briefing-app");
+    expect(secondInitiativeId).toBe("20260409-100000-daily-briefing-app-2");
   });
 
   it("creates docs and runtime layout with private workflow state files", () => {
     const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-workflow-"));
     tempDirs.push(targetRepo);
 
-    const workflowPaths = ensureWorkflowLayout(targetRepo, "20260409-daily-briefing-app");
+    const workflowPaths = ensureWorkflowLayout(targetRepo, "20260409-100000-daily-briefing-app");
     writeLatestWorkflowState(targetRepo, {
-      initiativeId: "20260409-daily-briefing-app",
+      initiativeId: "20260409-100000-daily-briefing-app",
       title: "Daily Briefing App",
       status: "briefed",
       briefPath: workflowPaths.briefPath,
@@ -69,13 +87,14 @@ describe("workflow artifacts", () => {
       suggestedSkill: "codex-gstack-autoplan",
       suggestedCommand: "/tmp/gstack-workflow-autoplan",
       requiresConfirmation: true,
-      initiativeId: "20260409-daily-briefing-app",
+      initiativeId: "20260409-100000-daily-briefing-app",
       reason: "planning request",
       updatedAt: "2026-04-09T10:00:00.000Z"
     });
     writeTeamBootstrapRecord(targetRepo, {
       host: "codex",
       mode: "required",
+      installMode: "global",
       bootstrappedAt: "2026-04-09T10:00:00.000Z"
     });
     appendProjectLearnings(targetRepo, [
@@ -93,20 +112,20 @@ describe("workflow artifacts", () => {
     expect(statSync(workflowPaths.teamBootstrapPath).mode & 0o777).toBe(PRIVATE_FILE_MODE);
     expect(statSync(workflowPaths.learningsPath).mode & 0o777).toBe(PRIVATE_FILE_MODE);
 
-    expect(readLatestWorkflowState(targetRepo)?.initiativeId).toBe("20260409-daily-briefing-app");
+    expect(readLatestWorkflowState(targetRepo)?.initiativeId).toBe("20260409-100000-daily-briefing-app");
     expect(readRouterState(targetRepo)?.suggestedSkill).toBe("codex-gstack-autoplan");
     expect(readTeamBootstrapRecord(targetRepo)?.mode).toBe("required");
     expect(readProjectLearnings(targetRepo)).toHaveLength(1);
-    expect(readFileSync(getWorkflowPaths(targetRepo, "20260409-daily-briefing-app").latestStatePath, "utf8")).toContain(
-      "\"status\": \"briefed\""
-    );
+    expect(
+      readFileSync(getWorkflowPaths(targetRepo, "20260409-100000-daily-briefing-app").latestStatePath, "utf8")
+    ).toContain("\"status\": \"briefed\"");
   });
 
   it("updates stable plan sections without rebuilding the whole document", () => {
     const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-plan-doc-"));
     tempDirs.push(targetRepo);
 
-    const initiativeId = "20260409-daily-briefing-app";
+    const initiativeId = "20260409-100000-daily-briefing-app";
     const initialPlan = createPlanDocument({
       initiativeId,
       title: "Daily Briefing App",
@@ -150,7 +169,7 @@ describe("workflow artifacts", () => {
     const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-context-"));
     tempDirs.push(targetRepo);
 
-    const initiativeId = "20260409-daily-briefing-app";
+    const initiativeId = "20260409-100000-daily-briefing-app";
     const planMarkdown = `# Plan: Daily Briefing App
 
 - Initiative ID: \`${initiativeId}\`

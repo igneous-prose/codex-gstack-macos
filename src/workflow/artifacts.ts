@@ -94,6 +94,7 @@ export interface RouterStateRecord {
 export interface TeamBootstrapRecord {
   readonly host: "codex";
   readonly mode: "required" | "optional";
+  readonly installMode: "global" | "repo-local";
   readonly bootstrappedAt: string;
 }
 
@@ -529,8 +530,25 @@ export function inferInitiativeTitle(rawIntent: string): string {
 }
 
 export function buildInitiativeId(title: string, now = new Date()): string {
-  const datePrefix = now.toISOString().slice(0, 10).replace(/-/g, "");
-  return `${datePrefix}-${slugify(title).slice(0, 48)}`;
+  const timestampPrefix = now
+    .toISOString()
+    .slice(0, 19)
+    .replace(/[-:]/g, "")
+    .replace("T", "-");
+  return `${timestampPrefix}-${slugify(title).slice(0, 48)}`;
+}
+
+export function allocateInitiativeId(repoRoot: string, title: string, now = new Date()): string {
+  const baseInitiativeId = buildInitiativeId(title, now);
+  let candidateInitiativeId = baseInitiativeId;
+  let suffix = 2;
+
+  while (existsSync(getWorkflowPaths(repoRoot, candidateInitiativeId).initiativeDir)) {
+    candidateInitiativeId = `${baseInitiativeId}-${suffix}`;
+    suffix += 1;
+  }
+
+  return candidateInitiativeId;
 }
 
 export function getWorkflowPaths(repoRoot: string, initiativeId: string): WorkflowPaths {
@@ -1090,7 +1108,7 @@ export function startOfficeHoursWorkflow(
   now = new Date()
 ): OfficeHoursResult {
   const title = inferInitiativeTitle(userIntent);
-  const initiativeId = buildInitiativeId(title, now);
+  const initiativeId = allocateInitiativeId(repoRoot, title, now);
   const rememberedLearnings = readProjectLearnings(repoRoot);
   const officeHoursMode = selectOfficeHoursMode(userIntent);
   const briefMarkdown = renderBriefMarkdown({

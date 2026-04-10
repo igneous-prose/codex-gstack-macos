@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,6 +14,7 @@ import {
   getWorkflowPaths,
   persistWorkflowContextSnapshots,
   readLatestWorkflowState,
+  readTeamBootstrapRecord,
   recordRetro,
   runAutoplan,
   type RouterStateRecord,
@@ -51,17 +51,21 @@ function getWorkflowWrapperPath(command: string): string {
   return path.join(homeDir, ".codex", "gstack-macos", "bin", command);
 }
 
-function resolveSuggestedCommand(route: WorkflowRouteKind): string | null {
+function getRepoLocalWorkflowWrapperPath(repoRoot: string, command: string): string {
+  return path.join(repoRoot, ".codex-gstack", "bin", command);
+}
+
+function resolveSuggestedCommand(route: WorkflowRouteKind, repoRoot: string): string | null {
   if (route === "direct") {
     return null;
   }
 
-  const wrapperPath = getWorkflowWrapperPath(`gstack-workflow-${ROUTE_WORKFLOW_COMMANDS[route]}`);
-  if (route === "ship" && !existsSync(wrapperPath)) {
-    return null;
+  const command = `gstack-workflow-${ROUTE_WORKFLOW_COMMANDS[route]}`;
+  const installMode = readTeamBootstrapRecord(repoRoot)?.installMode;
+  if (installMode === "repo-local") {
+    return getRepoLocalWorkflowWrapperPath(repoRoot, command);
   }
-
-  return wrapperPath;
+  return getWorkflowWrapperPath(command);
 }
 
 function resolveSuggestedNpmScript(route: WorkflowRouteKind, repoRoot: string): string | null {
@@ -109,7 +113,7 @@ function handleRouteCommand(args: string[]): void {
   const repoRoot = readTargetRepo(args);
   const input = requireInput(args);
   const decision = classifyWorkflowIntent(input);
-  const suggestedCommand = resolveSuggestedCommand(decision.route);
+  const suggestedCommand = resolveSuggestedCommand(decision.route, repoRoot);
   const routerState: RouterStateRecord = {
     route: decision.route,
     suggestedSkill: decision.suggestedSkill,
@@ -136,7 +140,7 @@ function handleDispatchCommand(args: string[]): void {
   const input = requireInput(args);
   const decision = classifyWorkflowIntent(input);
   const workflowStatus = buildWorkflowStatusSnapshot(repoRoot);
-  const suggestedCommand = resolveSuggestedCommand(decision.route);
+  const suggestedCommand = resolveSuggestedCommand(decision.route, repoRoot);
   const routerStateBase = {
     route: decision.route,
     suggestedSkill: decision.suggestedSkill,

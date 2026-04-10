@@ -70,10 +70,36 @@ grep -q "plan.md" "$repo_root/skills/codex-gstack-qa/SKILL.md" || {
 
 if [[ -f "$target_repo/.codex-gstack/workflow/team-bootstrap.json" ]]; then
   [[ -f "$target_repo/AGENTS.md" ]] || { echo "Missing $target_repo/AGENTS.md" >&2; exit 1; }
+  install_mode="$(
+    node -e '
+const fs = require("node:fs");
+const targetPath = process.argv[1];
+const record = JSON.parse(fs.readFileSync(targetPath, "utf8"));
+if (record.installMode !== "global" && record.installMode !== "repo-local") {
+  console.error(`Unsupported installMode in ${targetPath}: ${record.installMode}`);
+  process.exit(1);
+}
+process.stdout.write(record.installMode);
+' "$target_repo/.codex-gstack/workflow/team-bootstrap.json"
+  )"
+  expected_wrapper_prefix='$HOME/.codex/gstack-macos/bin/'
+  unexpected_wrapper_prefix='./.codex-gstack/bin/'
+  if [[ "$install_mode" == "repo-local" ]]; then
+    expected_wrapper_prefix='./.codex-gstack/bin/'
+    unexpected_wrapper_prefix='$HOME/.codex/gstack-macos/bin/'
+  fi
   grep -q "<!-- codex-gstack:start -->" "$target_repo/AGENTS.md" || {
     echo "Missing codex-gstack AGENTS section" >&2
     exit 1
   }
+  grep -Fq "$expected_wrapper_prefix" "$target_repo/AGENTS.md" || {
+    echo "Bootstrapped AGENTS must use $expected_wrapper_prefix for installMode=$install_mode" >&2
+    exit 1
+  }
+  if grep -Fq "$unexpected_wrapper_prefix" "$target_repo/AGENTS.md"; then
+    echo "Bootstrapped AGENTS must not use $unexpected_wrapper_prefix for installMode=$install_mode" >&2
+    exit 1
+  fi
   grep -q "gstack-workflow-dispatch" "$target_repo/AGENTS.md" || {
     echo "Bootstrapped AGENTS must reference the installed wrapper commands" >&2
     exit 1
@@ -84,6 +110,10 @@ if [[ -f "$target_repo/.codex-gstack/workflow/team-bootstrap.json" ]]; then
   }
   grep -q "gstack-workflow-qa" "$target_repo/AGENTS.md" || {
     echo "Bootstrapped AGENTS must reference the QA wrapper command" >&2
+    exit 1
+  }
+  grep -q "gstack-workflow-ship" "$target_repo/AGENTS.md" || {
+    echo "Bootstrapped AGENTS must reference the ship wrapper command" >&2
     exit 1
   }
 fi

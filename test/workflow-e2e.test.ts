@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -73,5 +73,27 @@ describe("workflow e2e", () => {
     );
     expect(readFileSync(nextOfficeHours.briefPath, "utf8")).toContain("Start from the narrow wedge");
     expect(getWorkflowPaths(targetRepo, nextOfficeHours.initiativeId).briefPath).toBe(nextOfficeHours.briefPath);
+  });
+
+  it("creates distinct initiative directories for repeated office-hours runs with the same idea", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-e2e-repeat-"));
+    tempDirs.push(targetRepo);
+
+    const firstRun = startOfficeHoursWorkflow(
+      targetRepo,
+      "I want to build a customer dashboard that cuts triage time for support leads.",
+      new Date("2026-04-09T10:00:00.000Z")
+    );
+    const secondRun = startOfficeHoursWorkflow(
+      targetRepo,
+      "I want to build a customer dashboard that cuts triage time for support leads.",
+      new Date("2026-04-09T10:00:00.000Z")
+    );
+
+    expect(firstRun.initiativeId).toBe("20260409-100000-i-want-to-build-a-customer-dashboard-that");
+    expect(secondRun.initiativeId).toBe("20260409-100000-i-want-to-build-a-customer-dashboard-that-2");
+    expect(firstRun.briefPath).not.toBe(secondRun.briefPath);
+    expect(existsSync(firstRun.briefPath)).toBe(true);
+    expect(existsSync(secondRun.briefPath)).toBe(true);
   });
 });

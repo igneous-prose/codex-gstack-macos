@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -8,16 +8,32 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+function normalizeExpectedWrapperPath(targetRepo: string, command: string): string {
+  return path.join(realpathSync(targetRepo), ".codex-gstack", "bin", command);
+}
+
 function runWorkflowScript(
   scriptName: string,
   args: string[],
-  envOverrides?: NodeJS.ProcessEnv
+  envOverrides?: NodeJS.ProcessEnv,
+  cwd = repoRoot,
+  processCwd?: string
 ): Record<string, unknown> {
   const output = execFileSync(
     "npm",
-    ["run", "--silent", scriptName, "--", ...args],
+    processCwd
+      ? [
+          "run",
+          "--silent",
+          scriptName,
+          "--",
+          ...args,
+          "--process-cwd",
+          processCwd
+        ]
+      : ["run", "--silent", scriptName, "--", ...args],
     {
-      cwd: repoRoot,
+      cwd,
       encoding: "utf8",
       env: {
         ...process.env,
@@ -63,7 +79,79 @@ describe("workflow cli", () => {
     );
   });
 
-  it("dispatches ship requests to the installed ship wrapper", () => {
+  it("dispatches repo-local planning requests to repo-local wrappers", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-repo-local-route-"));
+    tempDirs.push(targetRepo);
+
+    execFileSync(
+      "/bin/bash",
+      [path.join(repoRoot, "scripts", "bootstrap-repo.sh"), "required", targetRepo, "--install-mode", "repo-local"],
+      {
+        cwd: repoRoot
+      }
+    );
+
+    const result = runWorkflowScript("workflow:dispatch", [
+      "--repo",
+      targetRepo,
+      "--input",
+      "Help me plan this dashboard redesign"
+    ]);
+
+    expect(result.route).toBe("autoplan");
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.suggestedCommand).toBe(normalizeExpectedWrapperPath(targetRepo, "gstack-workflow-autoplan"));
+  });
+
+  it("dispatches repo-local ship requests to repo-local wrappers", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-repo-local-ship-route-"));
+    tempDirs.push(targetRepo);
+
+    execFileSync(
+      "/bin/bash",
+      [path.join(repoRoot, "scripts", "bootstrap-repo.sh"), "required", targetRepo, "--install-mode", "repo-local"],
+      {
+        cwd: repoRoot
+      }
+    );
+
+    const result = runWorkflowScript("workflow:dispatch", [
+      "--repo",
+      targetRepo,
+      "--input",
+      "Open PR for this branch"
+    ]);
+
+    expect(result.route).toBe("ship");
+    expect(result.suggestedSkill).toBe("codex-gstack-ship");
+    expect(result.suggestedCommand).toBe(normalizeExpectedWrapperPath(targetRepo, "gstack-workflow-ship"));
+  });
+
+  it("dispatches repo-local requests with target-repo-anchored wrapper paths even when invoked outside the repo", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-repo-local-outside-route-"));
+    const outsideCwd = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-outside-cwd-"));
+    tempDirs.push(targetRepo, outsideCwd);
+
+    execFileSync(
+      "/bin/bash",
+      [path.join(repoRoot, "scripts", "bootstrap-repo.sh"), "required", targetRepo, "--install-mode", "repo-local"],
+      {
+        cwd: repoRoot
+      }
+    );
+
+    const result = runWorkflowScript(
+      "workflow:dispatch",
+      ["--repo", targetRepo, "--input", "Help me plan this dashboard redesign"],
+      undefined,
+      repoRoot,
+      outsideCwd
+    );
+
+    expect(result.suggestedCommand).toBe(normalizeExpectedWrapperPath(targetRepo, "gstack-workflow-autoplan"));
+  });
+
+  it("dispatches ship requests to the installed ship wrapper", { timeout: 20000 }, () => {
     const fakeHome = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-home-"));
     const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-ship-route-"));
     tempDirs.push(fakeHome, targetRepo);
@@ -84,7 +172,7 @@ describe("workflow cli", () => {
 
     expect(result.route).toBe("ship");
     expect(result.suggestedSkill).toBe("codex-gstack-ship");
-    expect(String(result.suggestedCommand)).toContain("gstack-workflow-ship");
+    expect(result.suggestedCommand).toBe(path.join(fakeHome, ".codex", "gstack-macos", "bin", "gstack-workflow-ship"));
     expect(String(result.suggestedNpmScript)).toContain("npm run workflow:ship -- --repo ");
     expect(String(result.suggestedNpmScript)).toContain(path.basename(targetRepo));
   });
