@@ -92,11 +92,11 @@ process.stdout.write(record.installMode);
     echo "Missing codex-gstack AGENTS section" >&2
     exit 1
   }
-  grep -q "$expected_wrapper_prefix" "$target_repo/AGENTS.md" || {
+  grep -Fq "$expected_wrapper_prefix" "$target_repo/AGENTS.md" || {
     echo "Bootstrapped AGENTS must use $expected_wrapper_prefix for installMode=$install_mode" >&2
     exit 1
   }
-  if grep -q "$unexpected_wrapper_prefix" "$target_repo/AGENTS.md"; then
+  if grep -Fq "$unexpected_wrapper_prefix" "$target_repo/AGENTS.md"; then
     echo "Bootstrapped AGENTS must not use $unexpected_wrapper_prefix for installMode=$install_mode" >&2
     exit 1
   fi

@@ -191,6 +191,35 @@ describe("setup and bootstrap", () => {
     }).toThrow(/installMode=repo-local/);
   });
 
+  it("doctor rejects a repo-local bootstrap whose AGENTS section only contains .codex-gstack/bin as part of an absolute path", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-target-"));
+    tempDirs.push(targetRepo);
+
+    execFileSync(
+      "/bin/bash",
+      [path.join(repoRoot, "scripts/bootstrap-repo.sh"), "required", targetRepo, "--install-mode", "repo-local"],
+      {
+        cwd: repoRoot
+      }
+    );
+
+    writeFileSync(
+      path.join(targetRepo, "AGENTS.md"),
+      readFileSync(path.join(targetRepo, "AGENTS.md"), "utf8").replaceAll(
+        "./.codex-gstack/bin/",
+        "/tmp/xcodex-gstack/bin/"
+      ),
+      "utf8"
+    );
+
+    expect(() => {
+      execFileSync("/bin/bash", [path.join(repoRoot, "scripts/doctor.sh"), targetRepo], {
+        cwd: repoRoot,
+        stdio: "pipe"
+      });
+    }).toThrow(/must use \.\/\.codex-gstack\/bin\//);
+  });
+
   it("installs wrapper commands that can reach the workflow engine after the source checkout is removed", { timeout: 20000 }, () => {
     const tempSourceParent = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-source-parent-"));
     const tempSourceRepo = path.join(tempSourceParent, "codex-gstack-source");
