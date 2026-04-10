@@ -235,6 +235,22 @@ describe("workflow cli", () => {
     expect(Array.isArray(autoplan.unresolvedTasteDecisions)).toBe(true);
   });
 
+  it("rejects traversal initiative ids passed to autoplan", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-autoplan-traversal-"));
+    tempDirs.push(targetRepo);
+
+    expect(() =>
+      runWorkflowScript("workflow:autoplan", [
+        "--repo",
+        targetRepo,
+        "--initiative-id",
+        "../../../../tmp/escape",
+        "--input",
+        "Plan a migration"
+      ])
+    ).toThrow('Invalid initiative id "../../../../tmp/escape"');
+  });
+
   it("lets independent plan reviews update targeted sections", () => {
     const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-plan-review-"));
     tempDirs.push(targetRepo);

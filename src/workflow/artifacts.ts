@@ -134,6 +134,8 @@ export interface WorkflowStatusSnapshot {
   readonly reviewSequence: string[];
 }
 
+const INITIATIVE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
 function ensurePrivateDirectory(dirPath: string): void {
   mkdirSync(dirPath, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
   chmodSync(dirPath, PRIVATE_DIRECTORY_MODE);
@@ -158,6 +160,14 @@ function readJsonFile<T>(filePath: string): T | null {
 function normalizeMarkdown(content: string): string {
   const trimmed = content.trimEnd();
   return `${trimmed}\n`;
+}
+
+function assertValidInitiativeId(initiativeId: string): void {
+  if (!INITIATIVE_ID_PATTERN.test(initiativeId)) {
+    throw new Error(
+      `Invalid initiative id "${initiativeId}". Use lowercase letters, numbers, and single hyphens only.`
+    );
+  }
 }
 
 function titleCase(words: string[]): string {
@@ -552,6 +562,7 @@ export function allocateInitiativeId(repoRoot: string, title: string, now = new 
 }
 
 export function getWorkflowPaths(repoRoot: string, initiativeId: string): WorkflowPaths {
+  assertValidInitiativeId(initiativeId);
   const docsRoot = path.join(repoRoot, WORKFLOW_DOCS_ROOT);
   const runtimeRoot = path.join(repoRoot, WORKFLOW_RUNTIME_ROOT);
   const initiativeDir = path.join(docsRoot, initiativeId);

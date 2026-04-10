@@ -121,6 +121,15 @@ describe("workflow artifacts", () => {
     ).toContain("\"status\": \"briefed\"");
   });
 
+  it("rejects initiative ids that are not safe slugs", () => {
+    const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-invalid-initiative-"));
+    tempDirs.push(targetRepo);
+
+    expect(() => getWorkflowPaths(targetRepo, "../../../../tmp/escape")).toThrow(
+      'Invalid initiative id "../../../../tmp/escape"'
+    );
+  });
+
   it("updates stable plan sections without rebuilding the whole document", () => {
     const targetRepo = mkdtempSync(path.join(os.tmpdir(), "codex-gstack-plan-doc-"));
     tempDirs.push(targetRepo);
